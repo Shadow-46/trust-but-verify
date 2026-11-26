@@ -142,6 +142,7 @@ function opSetup(req: Record<string, unknown>, paths: StatePaths): Json {
     rmSync(paths.state, { force: true });
     rmSync(paths.audit, { force: true });
     rmSync(join(paths.root, "defense.json"), { force: true });
+    rmSync(join(paths.root, "security-alerts.jsonl"), { force: true });
     rmSync(paths.keysDir, { recursive: true, force: true });
 
     const master = createMasterKey(paths);

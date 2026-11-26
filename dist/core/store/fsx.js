@@ -132,50 +132,93 @@ function sleepMs(ms        )       {
 // A request holds the lock for a few milliseconds. Keep the total wait well
 // under the judge's 8 s per-operation timeout.
 const LOCK_WAIT_MS = 6_000;
-// A live holder that keeps the lock this long is treated as hung.
+// A lock without a readable PID (still being written, or garbage) is stale after this long.
 const LOCK_STALE_MS = 3_000;
+// A lock whose holder still looks alive is only treated as abandoned after this long (PID reuse).
+const LOCK_ABANDONED_MS = 20_000;
+// A stale-lock breaker that stays longer than this was killed mid-break.
+const BREAKER_STALE_MS = 1_000;
 
-function holderIsDead(lockPath        )          {
+/** True if the lock's holder has exited (or the lock is unreadable/abandoned for long enough). */
+function lockIsStale(lockPath        )          {
+  let age        ;
+  let pid        ;
   try {
-    const pid = Number.parseInt(readFileSync(lockPath, "utf8").split(" ")[0] ?? "", 10);
-    if (!Number.isInteger(pid) || pid <= 0) return false; // still being written; use the age rule
-    if (pid === process.pid) return false;
-    process.kill(pid, 0); // signal 0 = existence check only
-    return false;
-  } catch (err) {
-    return (err                         ).code === "ESRCH";
+    age = Date.now() - statSync(lockPath).mtimeMs;
+    pid = Number.parseInt(readFileSync(lockPath, "utf8").split(" ")[0] ?? "", 10);
+  } catch {
+    return false; // vanished or unreadable right now: just retry
+  }
+  if (!Number.isInteger(pid) || pid <= 0) return age > LOCK_STALE_MS;
+  if (pid !== process.pid) {
+    try {
+      process.kill(pid, 0); // signal 0 = existence check only
+    } catch (err) {
+      if ((err                         ).code === "ESRCH") return true;
+    }
+  }
+  return age > LOCK_ABANDONED_MS;
+}
+
+/**
+ * Break a stale lock without racing other waiters (red-team F1). Breaking is
+ * exclusive: only the process that creates `.lock.break` may unlink the lock,
+ * and it re-checks staleness while holding it, so it can never delete a fresh
+ * lock that another waiter has just taken.
+ */
+function breakStaleLock(lockPath        )       {
+  if (!lockIsStale(lockPath)) return;
+  const breaker = `${lockPath}.break`;
+  let b        ;
+  try {
+    b = openSync(breaker, "wx", FILE_MODE);
+  } catch {
+    try {
+      if (Date.now() - statSync(breaker).mtimeMs > BREAKER_STALE_MS) unlinkSync(breaker);
+    } catch {
+      // breaker vanished or is busy; retry later
+    }
+    return;
+  }
+  try {
+    if (lockIsStale(lockPath)) unlinkSync(lockPath);
+  } catch {
+    // lock already gone
+  } finally {
+    closeSync(b);
+    try {
+      unlinkSync(breaker);
+    } catch {
+      // already removed
+    }
   }
 }
 
 /**
  * Cross-process mutual exclusion. The judge starts one process per request, so
  * concurrent requests must not interleave read-modify-write cycles on state.
- * The lock file records the holder's PID: a lock whose holder has exited (for
- * example a request killed mid-way) is broken immediately, and one held longer
- * than LOCK_STALE_MS is broken as hung.
+ * The lock file records the holder's PID and a random token: a lock whose holder
+ * has exited (for example a request killed mid-way) is broken, exclusively, by
+ * one waiter; a holder only ever removes a lock that still carries its own token.
  */
 export function withLock   (dir        , fn         )    {
   ensurePrivateDir(dir);
   const lockPath = join(dir, ".lock");
+  const token = `${process.pid} ${Date.now()} ${randomBytes(8).toString("hex")}`;
   const deadline = Date.now() + LOCK_WAIT_MS;
   let fd                    ;
   while (fd === undefined) {
     try {
       fd = openSync(lockPath, "wx", FILE_MODE);
-      writeSync(fd, Buffer.from(`${process.pid} ${Date.now()}`, "utf8"));
+      writeSync(fd, Buffer.from(token, "utf8"));
     } catch (err) {
-      if ((err                         ).code !== "EEXIST") throw err;
-      try {
-        if (holderIsDead(lockPath) || Date.now() - statSync(lockPath).mtimeMs > LOCK_STALE_MS) {
-          unlinkSync(lockPath);
-          continue;
-        }
-      } catch {
-        // lock vanished between checks; retry immediately
-        continue;
-      }
+      const code = (err                         ).code;
+      // Windows cannot reopen a file whose deletion is still pending (red-team F5): that is "busy", not an error.
+      const pendingDelete = process.platform === "win32" && (code === "EPERM" || code === "EACCES");
+      if (code !== "EEXIST" && !pendingDelete) throw err;
+      if (code === "EEXIST") breakStaleLock(lockPath);
       if (Date.now() > deadline) throw new Error("state lock timeout");
-      sleepMs(5);
+      sleepMs(pendingDelete ? 2 : 5);
     }
   }
   try {
@@ -183,7 +226,7 @@ export function withLock   (dir        , fn         )    {
   } finally {
     closeSync(fd);
     try {
-      unlinkSync(lockPath);
+      if (readFileSync(lockPath, "utf8") === token) unlinkSync(lockPath);
     } catch {
       // already removed
     }

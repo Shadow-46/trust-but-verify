@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { signBytes, verifyBytes } from "../crypto/sign.ts";
 import { appendDurable, atomicWriteFile, readTextIfExists } from "../store/fsx.ts";
 import { publishHead } from "./witness.ts";
+import { IntegrityError } from "../errors.ts";
 import type { StatePaths } from "../store/paths.ts";
 
 /**
@@ -49,10 +50,19 @@ function recordHash(prev: string, r: Omit<AuditRecord, "hash" | "sig">): string 
 export function readAudit(paths: StatePaths): AuditRecord[] {
   const text = readTextIfExists(paths.audit);
   if (!text) return [];
+  // A corrupted line is an integrity failure, not an internal error (red-team F4).
   return text
     .split("\n")
     .filter((line) => line.length > 0)
-    .map((line) => JSON.parse(line) as AuditRecord);
+    .map((line) => {
+      try {
+        const r = JSON.parse(line) as AuditRecord;
+        if (typeof r !== "object" || r === null || typeof r.hash !== "string") throw new Error("shape");
+        return r;
+      } catch {
+        throw new IntegrityError("audit log");
+      }
+    });
 }
 
 export function appendAudit(paths: StatePaths, fields: AuditFields, existing?: AuditRecord[]): AuditRecord {
@@ -67,8 +77,10 @@ export function appendAudit(paths: StatePaths, fields: AuditFields, existing?: A
   const hash = recordHash(base.prev, base);
   // ML-DSA-65 signature over the chain hash: anyone holding keys/audit.pub can verify an exported log,
   // and someone without the signing key cannot rebuild a valid chain after editing it.
+  // Never write an unsigned record (red-team F3): a missing key after setup is tampering.
   const key = readTextIfExists(paths.auditKey);
-  const sig = key ? signBytes(Buffer.from(key, "base64"), Buffer.from(hash, "utf8")).toString("base64") : "";
+  if (!key) throw new IntegrityError("audit signing key missing");
+  const sig = signBytes(Buffer.from(key, "base64"), Buffer.from(hash, "utf8")).toString("base64");
   const record: AuditRecord = { ...base, hash, sig };
   appendDurable(paths.audit, JSON.stringify(record));
   // Signed head: lets a load detect a log whose tail was cut off after the last state save.
@@ -81,12 +93,17 @@ export type AuditHead = { seq: number; hash: string; sig: string };
 
 /** Throws if the signed head is forged or the log no longer contains it (truncation/replacement). */
 export function checkAuditHead(paths: StatePaths, records: AuditRecord[]): boolean {
+  // Only called once state exists, i.e. after setup wrote both files: missing ⇒ tampering (red-team F2).
   const text = readTextIfExists(paths.auditHead);
   const pub = readTextIfExists(paths.auditPub);
-  if (!text || !pub) return true;
-  const head = JSON.parse(text) as AuditHead;
-  if (!verifyBytes(Buffer.from(pub, "base64"), Buffer.from(head.hash, "utf8"), Buffer.from(head.sig, "base64"))) return false;
-  return records[head.seq - 1]?.hash === head.hash;
+  if (!text || !pub) return false;
+  try {
+    const head = JSON.parse(text) as AuditHead;
+    if (!verifyBytes(Buffer.from(pub, "base64"), Buffer.from(head.hash, "utf8"), Buffer.from(head.sig, "base64"))) return false;
+    return records[head.seq - 1]?.hash === head.hash;
+  } catch {
+    return false;
+  }
 }
 
 /** First recorded access decision for a request ID (later duplicates never overwrite it). */

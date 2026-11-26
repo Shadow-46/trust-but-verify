@@ -70,6 +70,7 @@ export function restoreBackup(paths: StatePaths, file: string): RestoreResult {
       const tmp = statePaths(scratch);
       atomicWriteFile(tmp.state, payload.state);
       atomicWriteFile(tmp.audit, payload.audit);
+      atomicWriteFile(tmp.auditPub, pub); // the key that just verified the backup signature
       let restored;
       let keys;
       try {
@@ -77,7 +78,7 @@ export function restoreBackup(paths: StatePaths, file: string): RestoreResult {
         const master = loadMasterKey(paths);
         keys = deriveKeys(master, Buffer.from(body.salt, "base64"));
         master.fill(0);
-        restored = loadState(tmp, keys.stateMac);
+        restored = loadState(tmp, keys.stateMac, { verifiedSnapshot: true });
       } catch {
         return { ok: false, reason: "state_invalid" };
       }

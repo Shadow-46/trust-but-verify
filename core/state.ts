@@ -1,4 +1,4 @@
-import { createHmac, timingSafeEqual } from "node:crypto";
+import { createHash, createHmac, timingSafeEqual } from "node:crypto";
 import type { Sealed } from "./crypto/aead.ts";
 import type { WrappedDataKey } from "./keys/keystore.ts";
 import { checkAuditHead, readAudit } from "./audit/log.ts";
@@ -38,6 +38,13 @@ type StateBody = {
   version: number;
   audit_seq: number;
   audit_hash: string;
+  /** SHA-256 of keys/audit.pub, pinned under the state MAC so the verification key cannot be swapped or removed. */
+  audit_pub_sha256: string;
+};
+
+const pubDigest = (paths: StatePaths): string | undefined => {
+  const pub = readTextIfExists(paths.auditPub);
+  return pub === undefined ? undefined : createHash("sha256").update(pub, "utf8").digest("hex");
 };
 
 type StateFile = { body: string; mac: string };
@@ -71,7 +78,7 @@ function readStateFile(paths: StatePaths): StateFile {
 }
 
 /** Load and authenticate state; any tampering or corruption fails closed. */
-export function loadState(paths: StatePaths, macKey: Buffer): State {
+export function loadState(paths: StatePaths, macKey: Buffer, opts: { verifiedSnapshot?: boolean } = {}): State {
   const file = readStateFile(paths);
   const expected = mac(macKey, file.body);
   const given = Buffer.from(file.mac, "hex");
@@ -80,6 +87,9 @@ export function loadState(paths: StatePaths, macKey: Buffer): State {
   }
   const b = JSON.parse(file.body) as StateBody;
   if (b.format !== 1) throw new IntegrityError("state");
+  if (typeof b.audit_pub_sha256 !== "string" || pubDigest(paths) !== b.audit_pub_sha256) {
+    throw new IntegrityError("audit verification key missing or replaced");
+  }
   // Freshness: a rolled-back state.json is older than records already in the log, and a
   // truncated or swapped log no longer contains the record this state was saved against.
   const records = readAudit(paths);
@@ -88,8 +98,12 @@ export function loadState(paths: StatePaths, macKey: Buffer): State {
   if (b.audit_seq > 0 && records[b.audit_seq - 1]?.hash !== b.audit_hash) {
     throw new IntegrityError("audit log truncated or replaced");
   }
-  if (!checkAuditHead(paths, records)) throw new IntegrityError("audit log truncated or replaced");
-  if (!matchesWitness(records)) throw new IntegrityError("rollback detected by the external witness");
+  // A backup snapshot (already authenticated by its ML-DSA signature) is older than the live
+  // head and witness by design; those two checks only apply to the live state.
+  if (!opts.verifiedSnapshot) {
+    if (!checkAuditHead(paths, records)) throw new IntegrityError("audit log truncated or replaced");
+    if (!matchesWitness(records)) throw new IntegrityError("rollback detected by the external witness");
+  }
   return {
     setupId: b.setup_id,
     salt: Buffer.from(b.salt, "base64"),
@@ -123,6 +137,7 @@ export function saveState(paths: StatePaths, macKey: Buffer, s: State): void {
     version: s.version,
     audit_seq: s.auditSeq,
     audit_hash: s.auditHash,
+    audit_pub_sha256: pubDigest(paths) ?? "",
   };
   const bodyJson = JSON.stringify(body);
   const file: StateFile = { body: bodyJson, mac: mac(macKey, bodyJson).toString("hex") };

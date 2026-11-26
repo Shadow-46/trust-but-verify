@@ -1,6 +1,7 @@
 import { join } from "node:path";
 import { appendAudit, readAudit } from "../audit/log.ts";
-import { atomicWriteFile, readTextIfExists, withLock } from "../store/fsx.ts";
+import { signBytes } from "../crypto/sign.ts";
+import { appendDurable, atomicWriteFile, readTextIfExists, withLock } from "../store/fsx.ts";
 import type { StatePaths } from "../store/paths.ts";
 
 /**
@@ -85,6 +86,24 @@ export function observeDecision(paths: StatePaths, actor: string, asset: string,
   save(paths, d, now);
 }
 
+/**
+ * Alerts raised when the audit log itself may be untrustworthy (tampered state,
+ * malformed input before any verification) must never be appended to that log:
+ * appending would write a fresh signed head over a possibly truncated log and
+ * make it look valid again. They go to a separate, ML-DSA-signed side file.
+ */
+const sideFile = (paths: StatePaths) => join(paths.root, "security-alerts.jsonl");
+
+function sideAlert(paths: StatePaths, d: Defense, key: string, rule: string, detail: string, now: number): void {
+  if (d.alerted.includes(key)) return;
+  d.alerted.push(key);
+  const ts = new Date(now).toISOString();
+  const body = JSON.stringify(["tbv/alert/v1", ts, rule, detail]);
+  const key64 = readTextIfExists(paths.auditKey);
+  const sig = key64 ? signBytes(Buffer.from(key64, "base64"), Buffer.from(body, "utf8")).toString("base64") : "";
+  appendDurable(sideFile(paths), JSON.stringify({ ts, rule, detail, sig }));
+}
+
 /** Record malformed or invalid requests and tampered state; never throws. */
 export function observeFailure(paths: StatePaths, kind: "invalid" | "integrity", now = Date.now()): void {
   try {
@@ -92,11 +111,11 @@ export function observeFailure(paths: StatePaths, kind: "invalid" | "integrity",
       const d = load(paths);
       const minute = Math.floor(now / WINDOW_MS);
       if (kind === "integrity") {
-        alert(paths, d, `state-integrity:${minute}`, "state_integrity", null, null, "state or audit log failed verification; service is fail-closed");
+        sideAlert(paths, d, `state-integrity:${minute}`, "state_integrity", "state or audit log failed verification; service is fail-closed", now);
       } else {
         d.invalid.push(now);
         const recent = d.invalid.filter((t) => now - t <= WINDOW_MS).length;
-        if (recent >= MALFORMED_BURST) alert(paths, d, `malformed:${minute}`, "malformed_input_burst", null, null, `${recent} invalid requests within 60 s`);
+        if (recent >= MALFORMED_BURST) sideAlert(paths, d, `malformed:${minute}`, "malformed_input_burst", `${recent} invalid requests within 60 s`, now);
       }
       save(paths, d, now);
     });
@@ -106,7 +125,24 @@ export function observeFailure(paths: StatePaths, kind: "invalid" | "integrity",
 }
 
 export function securityAlerts(paths: StatePaths) {
-  return readAudit(paths)
-    .filter((r) => r.type === "security_alert")
-    .map(({ seq, ts, actor, asset, reason }) => ({ seq, ts, actor, asset, rule: (reason ?? "").split(":")[0], detail: (reason ?? "").split(": ").slice(1).join(": ") }));
+  let logged: { seq: number | null; ts: string; actor: string | null; asset: string | null; rule: string; detail: string }[] = [];
+  try {
+    logged = readAudit(paths)
+      .filter((r) => r.type === "security_alert")
+      .map(({ seq, ts, actor, asset, reason }) => ({ seq, ts, actor, asset, rule: (reason ?? "").split(":")[0], detail: (reason ?? "").split(": ").slice(1).join(": ") }));
+  } catch {
+    // the log itself failed verification; the side file still reports it
+  }
+  const side = (readTextIfExists(sideFile(paths)) ?? "")
+    .split("\n")
+    .filter((l) => l.length > 0)
+    .flatMap((l) => {
+      try {
+        const a = JSON.parse(l) as { ts: string; rule: string; detail: string };
+        return [{ seq: null, ts: a.ts, actor: null, asset: null, rule: a.rule, detail: a.detail }];
+      } catch {
+        return [];
+      }
+    });
+  return [...logged, ...side].sort((a, b) => a.ts.localeCompare(b.ts));
 }
