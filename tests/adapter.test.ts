@@ -1,7 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createHmac, generateKeyPairSync } from "node:crypto";
-import { readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, readdirSync, readFileSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { decapsulate, exportMlKem768PublicKeyRaw } from "../core/crypto/kem.ts";
 import { verifyAudit, readAudit } from "../core/audit/log.ts";
 import { deriveKeys, loadMasterKey } from "../core/keys/keystore.ts";
@@ -195,6 +196,24 @@ test("concurrent processes do not lose decisions or break the audit chain", asyn
   for (let i = 0; i < 8; i++) {
     assert.equal(call(dir, { op: "audit", request_id: `c${i}` }).out.decision, i % 2 ? "allow" : "deny");
   }
+});
+
+test("planted state directory (symlink) is refused and a loose one is locked down to 0700", { skip: process.platform === "win32" }, () => {
+  const base = freshStateDir();
+  const target = join(base, "attacker-owned");
+  mkdirSync(target);
+  const link = join(base, "state-link");
+  symlinkSync(target, link);
+  const r = call(link, SETUP);
+  assert.equal(r.status, 1);
+  assert.deepEqual(r.out, { error: "internal_error" });
+  assert.equal(readdirSync(target).length, 0, "nothing may be written through the planted symlink");
+
+  const loose = join(base, "loose");
+  mkdirSync(loose, { mode: 0o777 });
+  chmodSync(loose, 0o777);
+  assert.deepEqual(call(loose, SETUP).out, { ready: true });
+  assert.equal(statSync(loose).mode & 0o777, 0o700);
 });
 
 test("requests before setup are refused cleanly", () => {

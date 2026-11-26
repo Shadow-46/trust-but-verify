@@ -1,6 +1,8 @@
 import {
+  chmodSync,
   closeSync,
   existsSync,
+  lstatSync,
   fsyncSync,
   mkdirSync,
   openSync,
@@ -18,6 +20,21 @@ const DIR_MODE = 0o700;
 
 export function ensureDir(dir: string): void {
   mkdirSync(dir, { recursive: true, mode: DIR_MODE });
+}
+
+/**
+ * The state root may sit in a shared temp directory. Refuse to use it if another
+ * user could have planted it: it must be a real directory (not a symlink), owned
+ * by us, and is forced to mode 0700 so nobody else can read or swap its files.
+ */
+export function ensurePrivateDir(dir: string): void {
+  ensureDir(dir);
+  const st = lstatSync(dir);
+  if (st.isSymbolicLink() || !st.isDirectory()) throw new Error("state directory is not a private directory");
+  if (typeof process.getuid === "function" && st.uid !== process.getuid()) {
+    throw new Error("state directory is owned by another user");
+  }
+  if (process.platform !== "win32" && (st.mode & 0o077) !== 0) chmodSync(dir, DIR_MODE);
 }
 
 /** Best-effort directory fsync so a rename survives power loss (no-op where unsupported). */
@@ -93,7 +110,7 @@ const LOCK_STALE_MS = 30_000;
  * A lock older than LOCK_STALE_MS is assumed abandoned by a crashed process.
  */
 export function withLock<T>(dir: string, fn: () => T): T {
-  ensureDir(dir);
+  ensurePrivateDir(dir);
   const lockPath = join(dir, ".lock");
   const deadline = Date.now() + LOCK_WAIT_MS;
   let fd: number | undefined;
