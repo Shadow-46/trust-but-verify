@@ -22,6 +22,7 @@ docker run --rm \
   --read-only \
   --tmpfs /tmp:rw,exec \
   -e HOME=/tmp \
+  -e TRACK4_TOOLKIT_DIR=/toolkit \
   -v "$REPO:/app:ro" \
   -v "$TOOLKIT:/toolkit:ro" \
   -w /app \
