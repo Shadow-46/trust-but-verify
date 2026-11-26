@@ -16,7 +16,7 @@ Node built-ins, so there is no `npm install` for the core.
 ```sh
 git clone https://github.com/Shadow-46/trust-but-verify.git
 cd trust-but-verify
-npm test                     # 25 tests (one is Linux-only and skipped on Windows)
+npm test                     # 26 tests (one is Linux-only and skipped on Windows)
 ```
 
 Run one request (the judging worker does exactly this, one process per request):
@@ -79,7 +79,7 @@ status, identity revocation, signature, timestamp (±30 s) and nonce (replay), t
 - **Device loss:** revoking a device stops only that device on every node; the owner enrols a new
   device (new key pair) and other users keep access. Revoking an identity stops all its devices.
 - **Measured propagation** (`evidence/t6-cluster.json`, Docker `node:24.11.1`, 3 node processes,
-  20 ms polling, 15 samples): revocation published → last node enforcing **median 18 ms, max 19 ms**.
+  20 ms polling, 15 samples): revocation published → last node enforcing **median 19 ms, max 21 ms**.
   Bound: one polling interval plus verification; all nodes share one host clock in this run.
 
 ```sh
@@ -104,6 +104,11 @@ compared with stripping types at runtime.
   audit chain head.
 - A reused `request_id` is only honoured as an identical retry of an earlier allow; any other reuse
   is denied without content.
+- Cluster demo: node processes sync policy over a shared filesystem (no network listener); requests
+  are authorized against each node's own stored, re-verified policy. Replay nonces and the in-flight
+  transfer table are in memory and are lost when a node restarts.
+- A brand-new node accepts any genuinely signed policy as its first one (no freshness bound yet).
+- The judged adapter identifies actors by ID only; per-device signatures exist in the cluster layer.
 - A request killed while holding the state lock is detected by PID and its lock is broken
   immediately; a live but hung holder is broken after 3 s.
 
