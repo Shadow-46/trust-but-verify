@@ -1,0 +1,193 @@
+import { spawn } from "node:child_process";
+import type { ChildProcess } from "node:child_process";
+import { randomBytes } from "node:crypto";
+import { cpus, platform, tmpdir } from "node:os";
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+import { ControlPlane } from "../cluster/control.ts";
+import { ClusterNode, signRequest } from "../cluster/node.ts";
+import type { AccessRequest } from "../cluster/node.ts";
+import { generateSigningKeyPair } from "../crypto/sign.ts";
+import type { SigningKeyPair } from "../crypto/sign.ts";
+
+/**
+ * Evidence run for goals 1 (key rotation) and 2 (revocation across nodes).
+ * Starts three nodes as separate OS processes that poll the signed policy,
+ * then exercises device loss, re-enrolment and key rotation, and measures the
+ * time from each revocation until the last node has adopted it.
+ *
+ *   npm run demo:cluster [-- <evidence-file>]
+ */
+
+const NODE_NAMES = ["node-a", "node-b", "node-c"];
+const POLL_MS = 20;
+const GRACE_MS = 1_500;
+const SAMPLES = 15;
+
+const here = dirname(fileURLToPath(import.meta.url));
+const ext = import.meta.url.endsWith(".ts") ? ".ts" : ".js";
+const nodeEntry = join(here, "..", "cluster", `nodeProcess${ext}`);
+const repoRoot = resolve(here, ext === ".ts" ? "../.." : "../../..");
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+type Device = { id: string; owner: string; keys: SigningKeyPair };
+type Step = { step: string; expect: string; observed: Record<string, string>; pass: boolean };
+
+function request(d: Device, extra: Partial<AccessRequest> = {}) {
+  const r: AccessRequest = {
+    actor: d.owner,
+    device_id: d.id,
+    key_version: 1,
+    op: "request",
+    transfer_id: null,
+    nonce: randomBytes(12).toString("hex"),
+    ts: Date.now(),
+    ...extra,
+  };
+  return signRequest(d.keys.privateKey, r);
+}
+
+function ackEpoch(dir: string): { epoch: number; adopted_at: number } {
+  try {
+    return JSON.parse(readFileSync(join(dir, "ack.json"), "utf8")) as { epoch: number; adopted_at: number };
+  } catch {
+    return { epoch: 0, adopted_at: 0 };
+  }
+}
+
+async function waitForEpoch(dirs: string[], epoch: number, timeoutMs = 10_000): Promise<number[]> {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    const acks = dirs.map(ackEpoch);
+    if (acks.every((a) => a.epoch >= epoch)) return acks.map((a) => a.adopted_at);
+    if (Date.now() > deadline) throw new Error(`nodes did not reach epoch ${epoch}`);
+    await sleep(2);
+  }
+}
+
+function percentile(sorted: number[], p: number): number {
+  return sorted[Math.min(sorted.length - 1, Math.ceil((p / 100) * sorted.length) - 1)];
+}
+
+export async function runClusterDemo(outFile: string): Promise<boolean> {
+  const base = mkdtempSync(join(tmpdir(), "tbv-cluster-"));
+  const cp = ControlPlane.create(join(base, "control"), { graceMs: GRACE_MS });
+  const dirs = NODE_NAMES.map((n) => join(base, n));
+  const children: ChildProcess[] = NODE_NAMES.map((n, i) =>
+    spawn(process.execPath, [nodeEntry, n, dirs[i], cp.paths.dir, String(POLL_MS)], { stdio: ["ignore", "ignore", "inherit"] }),
+  );
+  // Views read each node's own adopted policy (written by that node's process).
+  const views = NODE_NAMES.map((n, i) => new ClusterNode(n, dirs[i], cp.anchor, join(base, "unused")));
+  const steps: Step[] = [];
+  const check = (step: string, expect: string, build: () => ReturnType<typeof request>, want: string[]) => {
+    const observed: Record<string, string> = {};
+    const got = views.map((v) => {
+      v.reloadLocal();
+      const d = v.authorize(build());
+      observed[v.name] = `${d.decision} (${d.reason})`;
+      return d.decision;
+    });
+    steps.push({ step, expect, observed, pass: got.every((g, i) => g === want[i]) });
+  };
+  const all = (d: string) => NODE_NAMES.map(() => d);
+
+  try {
+    const enrol = async (owner: string, id: string) => {
+      const d: Device = { id, owner, keys: generateSigningKeyPair() };
+      await waitForEpoch(dirs, cp.enrolDevice(owner, id, d.keys.publicKey));
+      return d;
+    };
+    const phone = await enrol("maya", "maya-phone");
+    const laptop = await enrol("maya", "maya-laptop");
+    const omar = await enrol("omar", "omar-laptop");
+
+    check("normal operation", "enrolled devices allowed on every node", () => request(phone), all("allow"));
+
+    // Goal 2: device loss -> revoke only that device, measure propagation.
+    const t0 = Date.now();
+    const adopted = await waitForEpoch(dirs, cp.revokeDevice("maya-phone", t0));
+    const samples = [Math.max(...adopted) - t0];
+    check("lost device after revocation", "maya-phone denied on every node", () => request(phone), all("deny"));
+    check("owner's other device", "maya-laptop still allowed", () => request(laptop), all("allow"));
+    check("other users", "omar unaffected", () => request(omar), all("allow"));
+    const phone2 = await enrol("maya", "maya-phone-2");
+    check("re-enrolment", "new device for maya allowed", () => request(phone2), all("allow"));
+
+    for (let i = 1; i < SAMPLES; i++) {
+      await enrol("sampler", `sample-${i}`);
+      const t = Date.now();
+      const acks = await waitForEpoch(dirs, cp.revokeDevice(`sample-${i}`, t));
+      samples.push(Math.max(...acks) - t);
+    }
+
+    // Goal 1: key rotation with a documented cutoff and in-flight transfers.
+    const rot = cp.rotateKey();
+    await waitForEpoch(dirs, rot.epoch);
+    check("rotation grace period", "old key v1 still accepted before cutoff", () => request(laptop), all("allow"));
+    views.forEach((v, i) => {
+      v.reloadLocal();
+      v.authorize(request(laptop, { op: "begin_transfer", transfer_id: `tx-${i}` }));
+    });
+    await sleep(Math.max(0, rot.cutoff - Date.now()) + 20);
+    check("after cutoff", "new requests with old key v1 rejected on every node", () => request(laptop), all("deny"));
+    const observed: Record<string, string> = {};
+    const chunkResults = views.map((v, i) => {
+      const d = v.authorize(request(laptop, { op: "chunk", transfer_id: `tx-${i}` }));
+      observed[v.name] = `${d.decision} (${d.reason})`;
+      return d.decision;
+    });
+    steps.push({
+      step: "in-flight transfer after cutoff",
+      expect: "transfer begun before cutoff completes on v1",
+      observed,
+      pass: chunkResults.every((d) => d === "allow"),
+    });
+    check("new key", "requests with key v2 allowed", () => request(laptop, { key_version: rot.newVersion }), all("allow"));
+
+    const sorted = [...samples].sort((a, b) => a - b);
+    const evidence = {
+      generated_at: new Date().toISOString(),
+      environment: { node: process.version, openssl: process.versions.openssl, platform: platform(), cpus: cpus().length },
+      config: {
+        nodes: NODE_NAMES,
+        poll_ms: POLL_MS,
+        grace_ms: GRACE_MS,
+        samples: SAMPLES,
+        clock: "single host; all nodes share one clock",
+      },
+      steps,
+      revocation_propagation_ms: {
+        definition: "control-plane publish time to the latest node adoption time (each node verifies the ML-DSA signature and epoch)",
+        samples,
+        median: percentile(sorted, 50),
+        p95: percentile(sorted, 95),
+        max: sorted.at(-1),
+      },
+      all_passed: steps.every((s) => s.pass),
+    };
+    mkdirSync(dirname(outFile), { recursive: true });
+    writeFileSync(outFile, JSON.stringify(evidence, null, 2) + "\n");
+    for (const s of steps) process.stdout.write(`${s.pass ? "PASS" : "FAIL"}  ${s.step}: ${s.expect}\n`);
+    const r = evidence.revocation_propagation_ms;
+    process.stdout.write(
+      `revocation -> last node enforcing: median ${r.median} ms, p95 ${r.p95} ms, max ${r.max} ms (${SAMPLES} samples, poll ${POLL_MS} ms)\n`,
+    );
+    process.stdout.write(`evidence written to ${outFile}\n`);
+    return evidence.all_passed;
+  } finally {
+    for (const d of dirs) writeFileSync(join(d, "stop"), "");
+    for (const c of children) c.kill();
+  }
+}
+
+if (resolve(process.argv[1] ?? "") === fileURLToPath(import.meta.url)) {
+  const out = resolve(process.argv[2] ?? join(repoRoot, "evidence", "t6-cluster.json"));
+  runClusterDemo(out).then(
+    (ok) => (process.exitCode = ok ? 0 : 1),
+    (err: unknown) => {
+      process.stderr.write(`demo failed: ${err instanceof Error ? err.message : "unknown error"}\n`);
+      process.exitCode = 1;
+    },
+  );
+}
