@@ -19,7 +19,8 @@ export type AuditType =
   | "duplicate_request_id"
   | "revoke"
   | "key_rotation"
-  | "backup_restored";
+  | "backup_restored"
+  | "security_alert";
 
 export type AuditFields = {
   type: AuditType;

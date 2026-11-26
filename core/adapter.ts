@@ -1,5 +1,6 @@
 import { createHmac, randomBytes } from "node:crypto";
 import { rmSync } from "node:fs";
+import { join } from "node:path";
 import { seal } from "./crypto/aead.ts";
 import { decodeBase64Strict } from "./crypto/encoding.ts";
 import { encapsulate, importMlKem768PublicKey } from "./crypto/kem.ts";
@@ -11,6 +12,7 @@ import { appendAudit, findDecision, readAudit } from "./audit/log.ts";
 import { saveState } from "./state.ts";
 import type { State } from "./state.ts";
 import { assetAad, openContext, readBody } from "./vault.ts";
+import { isQuarantined, observeDecision, observeFailure } from "./defense/guard.ts";
 import type { Context } from "./vault.ts";
 import { atomicWriteFile, withLock } from "./store/fsx.ts";
 import { statePaths } from "./store/paths.ts";
@@ -93,6 +95,7 @@ function authorizeAndRecord(
   if (first && !(first.decision === "allow" && first.actor === actor && first.asset === asset)) {
     decision = { decision: "deny", reason: "request_id_reused" };
   }
+  if (decision.decision === "allow" && isQuarantined(paths, actor)) decision = { decision: "deny", reason: "quarantined" };
   let body: string | undefined;
   if (decision.decision === "allow") {
     try {
@@ -115,6 +118,7 @@ function authorizeAndRecord(
     },
     records,
   );
+  observeDecision(paths, actor, asset, decision.decision, decision.reason);
   return decision.decision === "allow" ? { decision, body } : { decision };
 }
 
@@ -137,6 +141,7 @@ function opSetup(req: Record<string, unknown>, paths: StatePaths): Json {
     // A new setup replaces all previous state, keys and audit history.
     rmSync(paths.state, { force: true });
     rmSync(paths.audit, { force: true });
+    rmSync(join(paths.root, "defense.json"), { force: true });
     rmSync(paths.keysDir, { recursive: true, force: true });
 
     const master = createMasterKey(paths);
@@ -255,9 +260,13 @@ export function handle(input: string, paths: StatePaths = statePaths()): Reply {
   try {
     req = JSON.parse(input);
   } catch {
+    observeFailure(paths, "invalid");
     return failure("invalid_json");
   }
-  if (!isObject(req)) return failure("invalid_request");
+  if (!isObject(req)) {
+    observeFailure(paths, "invalid");
+    return failure("invalid_request");
+  }
   const op = field(req, "op");
   try {
     switch (op) {
@@ -275,8 +284,12 @@ export function handle(input: string, paths: StatePaths = statePaths()): Reply {
         return failure("unsupported_operation");
     }
   } catch (err) {
-    if (err instanceof RequestError) return failure(err.code);
+    if (err instanceof RequestError) {
+      if (err.code !== "not_initialized") observeFailure(paths, "invalid");
+      return failure(err.code);
+    }
     if (err instanceof IntegrityError) {
+      observeFailure(paths, "integrity");
       process.stderr.write("integrity check failed; request refused\n");
       return failure(err.code);
     }

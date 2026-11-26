@@ -6,7 +6,8 @@ export type DenyReason =
   | "revoked"
   | "not_owner"
   | "integrity_failure"
-  | "request_id_reused";
+  | "request_id_reused"
+  | "quarantined";
 export type Decision =
   | { decision: "allow"; reason: "owner" }
   | { decision: "deny"; reason: DenyReason };

@@ -6,6 +6,7 @@ import { detect } from "./detector/detect.js";
 import { loadPolicy, parseApprovals, parseEventsCsv } from "./detector/ingest.js";
 import { generate } from "./detector/synth.js";
 import { openContext } from "./vault.js";
+import { securityAlerts } from "./defense/guard.js";
 import { createBackup, restoreBackup } from "./backup.js";
 import { rotateStoredDataKey } from "./keys/rotation.js";
 import { statePaths } from "./store/paths.js";
@@ -68,6 +69,8 @@ export function runOps(argv          )                                 {
         },
       };
     }
+    case "alerts":
+      return { code: 0, out: securityAlerts(paths) };
     case "rotate":
       return { code: 0, out: rotateStoredDataKey(paths) };
   }

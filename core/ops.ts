@@ -5,6 +5,7 @@ import { detect } from "./detector/detect.ts";
 import { loadPolicy, parseApprovals, parseEventsCsv } from "./detector/ingest.ts";
 import { generate } from "./detector/synth.ts";
 import { openContext } from "./vault.ts";
+import { securityAlerts } from "./defense/guard.ts";
 import { createBackup, restoreBackup } from "./backup.ts";
 import { rotateStoredDataKey } from "./keys/rotation.ts";
 import { statePaths } from "./store/paths.ts";
@@ -67,6 +68,8 @@ export function runOps(argv: string[]): { code: number; out: unknown } {
         },
       };
     }
+    case "alerts":
+      return { code: 0, out: securityAlerts(paths) };
     case "rotate":
       return { code: 0, out: rotateStoredDataKey(paths) };
   }
