@@ -51,6 +51,23 @@ function fsyncDir(dir: string): void {
 }
 
 /**
+ * On Windows, replacing a file that another process has open fails with
+ * EPERM/EACCES/EBUSY for a moment; retry briefly. POSIX rename never does this.
+ */
+function renameWithRetry(from: string, to: string): void {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      renameSync(from, to);
+      return;
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code;
+      if (attempt >= 50 || (code !== "EPERM" && code !== "EACCES" && code !== "EBUSY")) throw err;
+      sleepMs(2);
+    }
+  }
+}
+
+/**
  * Replace `path` atomically: write a private temp file in the same directory,
  * fsync it, then rename over the target. Readers see the old or the new file,
  * never a partial one.
@@ -67,7 +84,7 @@ export function atomicWriteFile(path: string, data: string | Buffer): void {
     closeSync(fd);
   }
   try {
-    renameSync(tmp, path);
+    renameWithRetry(tmp, path);
   } catch (err) {
     try {
       unlinkSync(tmp);
