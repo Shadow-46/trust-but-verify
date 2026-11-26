@@ -7,7 +7,7 @@ when an identity gains unexpected privileges or moves between services.
 Built for Yugaantar DevForge 2026, Track 4.
 
 > Work in progress: the protected-resource service, key rotation and multi-node revocation are
-> complete; crash recovery, backups, signed logs, messaging and the detector are complete; the operator dashboard is being added.
+> complete; crash recovery, backups, signed logs, messaging and the detector are complete; the operator console is included for the demo.
 
 **Docs:** [Evidence for all 12 goals](docs/EVIDENCE.md) · [Threat model](docs/THREAT_MODEL.md)
 
@@ -129,6 +129,12 @@ npm run demo:cluster        # runs the scenario and rewrites evidence/t6-cluster
 
 ## Detector accuracy (goals 6–8)
 `npm run demo:detector` scores the rule-based detector on seeded synthetic logs (practice CSV format; ground truth never given to the detector). Results in `evidence/t5-detector.json` and `docs/EVIDENCE.md`: per-incident F1 1 (standard) and 1 (hard: borrowed approvals, successful lateral hops, late-delivered approvals), median time-to-alert 1560.25 / 1092.25 ms, 0 false alerts per 1,000 benign events. These are upper bounds: the generator models the same documented environment the rules encode.
+
+## Operator console (demo)
+```sh
+cd dashboard && npm install && npm run dev     # http://localhost:3000
+```
+Runs the real adapter and ops CLI (whitelisted actions only, state in `<os temp>/tbv-dashboard`): lost-device flow with the signed decision trail and a reason for every allow/deny; log verification, key rotation and a live rollback attack that fails closed; cluster propagation evidence; detector metrics and explained alerts on a fresh synthetic log.
 
 ## Performance
 One request = one Node process. Measured in Docker `node:24.11.1` on a native filesystem:
