@@ -134,6 +134,10 @@ export async function POST(request: Request) {
         else startNode(name);
         return Response.json({ ok: true, out: { node: name, running: nodes.has(name) } });
       }
+      case "messaging": {
+        const text = typeof body.text === "string" ? body.text.replace(/[\r\n]+/g, " ").slice(0, 200) : "";
+        return Response.json(text ? ops("messaging", text) : ops("messaging"));
+      }
       case "attacks":
         return Response.json(ops("attacks"));
       case "attack":

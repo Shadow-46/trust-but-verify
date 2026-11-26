@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Bell, Check, Crosshair, FileText, KeyRound, LayoutGrid, Network, ScrollText, ShieldCheck, ShieldX, Users, X } from "lucide-react";
+import { Bell, Check, Crosshair, FileText, KeyRound, LayoutGrid, MessagesSquare, Network, ScrollText, ShieldCheck, ShieldX, Users, X } from "lucide-react";
 import { animate, motion } from "motion/react";
 import { Tour } from "@/components/tour";
 import type { TourStep } from "@/components/tour";
@@ -14,7 +14,7 @@ import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "
 /* eslint-disable @typescript-eslint/no-explicit-any */
 type Res = { ok: boolean; out: any; blocked?: boolean; ms?: number };
 type Row = { seq: number; ts: string; type: string; actor: string | null; asset: string | null; decision: string | null; reason: string | null; hash: string };
-type Section = "overview" | "files" | "users" | "audit" | "keys" | "nodes" | "alerts" | "lab";
+type Section = "overview" | "files" | "users" | "audit" | "keys" | "nodes" | "messages" | "alerts" | "lab";
 
 const USERS = ["maya", "omar", "dana", "mallory"];
 const BECAUSE: Record<string, string> = {
@@ -128,6 +128,13 @@ export default function Console() {
   const [touring, setTouring] = useState(false);
   const [attacks, setAttacks] = useState<any[]>([]);
   const [live, setLive] = useState<any>(null);
+  const [chat, setChat] = useState<any>(null);
+  const [draft, setDraft] = useState("Can you review the Q3 design doc?");
+  const runChat = async (text?: string) => {
+    const r = await run("messaging", text ? { text } : {});
+    setChat(r.out);
+    return r.out;
+  };
   const [ripple, setRipple] = useState<string | null>(null);
   const pollCluster = useCallback(async () => {
     const r = await api("cluster-status");
@@ -259,6 +266,7 @@ export default function Console() {
     { section: "nodes", target: "live-cluster", title: "Watch a revocation ripple", body: "Three real node processes each verify the ML-DSA-signed policy. We report maya's phone lost and watch every node switch from allow to deny.", run: async () => { await startCluster(); const msg = await revokeLive(); return msg ? ok(msg) : bad("Nodes did not converge"); }, dwell: 8000 },
     { section: "nodes", target: "nodes-stats", title: "Revocation reaches every node", body: "Three separate node processes pull an ML-DSA-signed, epoch-versioned policy and refuse forged or older versions.", run: async () => (ev?.cluster ? ok(`Median ${ev.cluster.revocation_propagation_ms.median} ms, worst case ${ev.cluster.revocation_propagation_ms.max} ms`) : undefined) },
     { section: "nodes", target: "nodes-checks", title: "Rotation with a documented cutoff", body: "The old key is accepted until the cutoff, then rejected everywhere, while transfers that already started finish.", dwell: 6000 },
+    { section: "messages", target: "messages", title: "Post-quantum messaging", body: "alice and bob agree keys with X25519 plus ML-KEM-768 and sign the handshake with ML-DSA-65. Then we replay, re-address, tamper, hijack the session and try to decrypt old traffic with stolen identity keys.", run: async () => { const out = await runChat(); const n = out?.attacks?.filter((a: any) => a.blocked).length ?? 0; return n === out?.attacks?.length ? ok(`Conversation delivered; ${n} of ${n} attacks rejected`) : bad(`${n} attacks rejected`); }, dwell: 9000 },
     { section: "alerts", target: "alerts", title: "Catching misuse of valid credentials", body: "An explainable detector (rules, approvals and a service graph, no ML) analyses a fresh access log with hidden incidents.", run: async () => { const r = await run("detect", { seed: freshSeed() }); setDet(r.out); return r.out?.alerts ? ok(`${r.out.alerts.length} alerts for ${r.out.incidents.length} hidden incidents`) : bad("Analysis failed"); }, dwell: 8000 },
     { section: "overview", target: "kpis", title: "Verified, not claimed", body: "Official validator 22/22 in the judges' runtime, revocation in about 20 ms, every decision explained and signed. Thank you.", dwell: 7000 },
   ];
@@ -277,6 +285,7 @@ export default function Console() {
     { id: "audit", label: "Audit log", icon: ScrollText },
     { id: "keys", label: "Keys", icon: KeyRound },
     { id: "nodes", label: "Nodes", icon: Network },
+    { id: "messages", label: "Messages", icon: MessagesSquare },
     { id: "alerts", label: "Alerts", icon: Bell },
     { id: "lab", label: "Attack lab", icon: Crosshair },
   ];
@@ -560,6 +569,52 @@ export default function Console() {
                 </table>
               </Panel>
             </>
+          )}
+
+          {section === "messages" && (
+            <Panel
+              tour="messages"
+              title="End-to-end messages"
+              action={
+                <form className="flex gap-2" onSubmit={(e) => { e.preventDefault(); void runChat(draft); }}>
+                  <input value={draft} onChange={(e) => setDraft(e.target.value)} maxLength={200} aria-label="Message from alice" className="h-8 w-64 rounded-md border border-[#E3E5E8] bg-white px-2 text-sm outline-none focus-visible:ring-2 focus-visible:ring-[#1D4ED8]/30" />
+                  <Button size="sm" type="submit" className={primary} disabled={busy}>Send securely</Button>
+                </form>
+              }
+            >
+              {!chat && <p className="px-4 py-8 text-center text-sm text-[#5C6370]">Send a message to run a real post-quantum handshake between alice and bob.</p>}
+              {chat && (
+                <>
+                  <p className="border-b border-[#E3E5E8] px-4 py-2.5 text-xs text-[#5C6370]">Session <span className="font-mono">{chat.handshake.session}</span>: {chat.handshake.algorithms}. Keys erased after close: {chat.handshake.keys_erased ? "yes" : "no"}.</p>
+                  <div className="grid gap-4 p-4 md:grid-cols-2">
+                    {["alice", "bob"].map((who) => (
+                      <div key={who} className="rounded-lg border border-[#E3E5E8]">
+                        <div className="border-b border-[#E3E5E8] px-3 py-2 text-sm font-medium">{who}</div>
+                        <div className="space-y-2 p-3">
+                          {chat.messages.map((m: any, i: number) => {
+                            const mine = m.from === who;
+                            return (
+                              <motion.div key={m.msg_id + who} initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: i * 0.25 }} className={`max-w-[85%] rounded-lg px-3 py-2 text-sm ${mine ? "ml-auto bg-[#1D4ED8] text-white" : "bg-[#F1F2F4]"}`}>
+                                <div>{m.text}</div>
+                                <div className={`mt-1 font-mono text-[10px] ${mine ? "text-white/70" : "text-[#5C6370]"}`}>{m.chunks} encrypted chunks · {m.ciphertext_preview}</div>
+                              </motion.div>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                  <ul className="border-t border-[#E3E5E8]">
+                    {chat.attacks.map((a: any, i: number) => (
+                      <motion.li key={a.name} initial={{ opacity: 0, x: -6 }} animate={{ opacity: 1, x: 0 }} transition={{ delay: 0.6 + i * 0.12 }} className="flex items-center justify-between gap-3 border-b border-[#EEF0F2] px-4 py-2 text-sm last:border-b-0">
+                        <span>{a.name}</span>
+                        <span className={`inline-flex items-center gap-1.5 rounded-md px-2 py-0.5 text-xs ${a.blocked ? "bg-[#E7F5EE] text-[#0F7B4F]" : "bg-[#FDECEA] text-[#B42318]"}`}>{a.blocked ? <ShieldCheck className="size-3.5" /> : <ShieldX className="size-3.5" />}<span className="font-mono">{a.evidence}</span></span>
+                      </motion.li>
+                    ))}
+                  </ul>
+                </>
+              )}
+            </Panel>
           )}
 
           {section === "lab" && (
