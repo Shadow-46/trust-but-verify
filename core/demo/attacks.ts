@@ -58,7 +58,7 @@ function cluster() {
   cp.enrolDevice("maya", "maya-phone", device.publicKey);
   node.sync();
   const request = (extra: Partial<AccessRequest> = {}) =>
-    signRequest(device.privateKey, { actor: "maya", device_id: "maya-phone", key_version: 1, op: "request", transfer_id: null, nonce: randomBytes(8).toString("hex"), ts: Date.now(), ...extra });
+    signRequest(device.privateKey, { actor: "maya", device_id: "maya-phone", node: "node-a", key_version: 1, op: "request", transfer_id: null, nonce: randomBytes(8).toString("hex"), ts: Date.now(), ...extra });
   return { base, cp, node, request };
 }
 

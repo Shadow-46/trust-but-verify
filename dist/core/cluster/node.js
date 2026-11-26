@@ -22,6 +22,12 @@ export const MAX_TRANSFER_MS = 120_000;
                              
                 
                     
+     
+                                                                                                   
+                                                                                                  
+                                                                                               
+     
+               
                       
                 
                              
@@ -41,7 +47,7 @@ export const MAX_TRANSFER_MS = 120_000;
 /** The exact bytes a device signs: a fixed-order JSON array, so fields cannot be confused. */
 export function requestBytes(r               )         {
   return Buffer.from(
-    JSON.stringify(["tbv/req/v1", r.actor, r.device_id, r.key_version, r.op, r.transfer_id, r.nonce, r.ts]),
+    JSON.stringify(["tbv/req/v2", r.actor, r.device_id, r.node, r.key_version, r.op, r.transfer_id, r.nonce, r.ts]),
     "utf8",
   );
 }
@@ -191,6 +197,9 @@ export class ClusterNode {
     if (!verifyBytes(Buffer.from(device.public_key, "base64"), requestBytes(req), signature)) {
       return this.deny("bad_signature");
     }
+    // Audience binding: the signed request names its target node. Rejected on one node means
+    // rejected on every node: a request captured on (or meant for) node-a is refused elsewhere.
+    if (req.node !== this.name) return this.deny("wrong_node");
     if (!Number.isFinite(req.ts) || Math.abs(now - req.ts) > MAX_CLOCK_SKEW_MS) return this.deny("stale_or_future_request");
 
     // Replay nonces and transfers live on disk (under the node's lock), so a restarted node,

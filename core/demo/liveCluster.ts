@@ -44,7 +44,7 @@ export function clusterStatus(dir: string) {
     const ack = JSON.parse(readFileSync(join(nodeDir, "ack.json"), "utf8")) as { epoch: number; adopted_at: number };
     const view = new ClusterNode(name, nodeDir, cp.anchor, join(dir, "unused"));
     const req = signRequest(Buffer.from(d.privateKey, "base64"), {
-      actor: "maya", device_id: d.device_id, key_version: cp.policy.active_key, op: "request", transfer_id: null, nonce: randomBytes(8).toString("hex"), ts: Date.now(),
+      actor: "maya", device_id: d.device_id, node: name, key_version: cp.policy.active_key, op: "request", transfer_id: null, nonce: randomBytes(8).toString("hex"), ts: Date.now(),
     });
     const decision = view.authorize(req);
     return { name, epoch: ack.epoch, adopted_at: ack.adopted_at, decision: decision.decision, reason: decision.reason };

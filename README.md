@@ -70,7 +70,10 @@ policy or a replayed older one (e.g. from before a revocation) is refused. Nodes
 their last verified policy if the control plane is unreachable, including after a restart.
 
 Every request is signed by an enrolled **device key** (ML-DSA-65) and checked for owner, device
-status, identity revocation, signature, timestamp (±30 s) and nonce (replay), then key version.
+status, identity revocation, signature, **target node**, timestamp (±30 s) and nonce (replay), then key version.
+The target node is inside the signed bytes (audience binding), so a captured request replayed to a *different*
+node is refused there as `wrong_node`: rejected on one node means rejected on every node, also after restarts
+(`tests/cluster-hardening.test.ts`).
 
 - **Key rotation — grace period: yes.** Rotating activates version *n+1*; version *n* stays valid for
   new requests until `cutoff = rotation time + grace_ms` (30 s by default, 1.5 s in the demo).

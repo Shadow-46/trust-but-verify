@@ -49,6 +49,7 @@ readable only by the service user (0600/0700) or the master key comes from a KMS
 | Delete the log head or swap/delete the log keys to hide records | Head and key mandatory after setup; key hash pinned in MAC'd state; never write unsigned | red-team regression tests (F2–F4) |
 | Concurrent requests racing a dead holder's lock | Exclusive, re-checked lock breaking; own-token unlock | 4 × 20 parallel requests test (F1/F5) |
 | Node restart used to replay a request or drop a transfer | Nonces and transfers persisted per node | cluster-hardening tests |
+| Captured request replayed to a different node | Target node signed into every request (audience binding); other nodes refuse it as `wrong_node` | cluster-hardening test (node-a → node-b/node-c, also after restart) |
 | New node fed an old, genuinely signed policy | Provisioned epoch floor + policy hash (`trust.json`) | cluster-hardening tests |
 | Network attacker on the policy or message wire | ML-DSA-signed policy over HTTP; signed hybrid handshake + AEAD over TCP; 64 KB frame cap | network tests (forged policy, replay, bit flip, oversize, partition) |
 

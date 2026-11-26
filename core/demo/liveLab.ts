@@ -91,6 +91,7 @@ function nodeChecks(reason: string): Check[] {
     ["Device not revoked", ["device_revoked"]],
     ["User not revoked", ["actor_revoked"]],
     ["ML-DSA request signature valid", ["bad_signature"]],
+    ["Request addressed to this node", ["wrong_node"]],
     ["Timestamp within ±30 s", ["stale_or_future_request"]],
     ["Nonce never seen before", ["replayed_request"]],
     ["Key version accepted", ["unknown_key_version", "key_version_retired"]],
@@ -180,8 +181,9 @@ function waitForEpoch(dir: string, epoch: number, limitMs = 3000): number | null
   return null;
 }
 
-const request = (dir: string, d: DemoDevice, op: AccessRequest["op"] = "request"): SignedAccessRequest =>
-  signRequest(Buffer.from(d.privateKey, "base64"), { actor: "maya", device_id: d.device_id, key_version: control(dir).policy.active_key, op, transfer_id: null, nonce: randomBytes(8).toString("hex"), ts: Date.now() });
+/** A request signed for one target node (audience binding: every other node refuses it as wrong_node). */
+const request = (dir: string, d: DemoDevice, node: string, op: AccessRequest["op"] = "request"): SignedAccessRequest =>
+  signRequest(Buffer.from(d.privateKey, "base64"), { actor: "maya", device_id: d.device_id, node, key_version: control(dir).policy.active_key, op, transfer_id: null, nonce: randomBytes(8).toString("hex"), ts: Date.now() });
 
 // ---------- the 8 live storyboards ----------
 
@@ -219,7 +221,7 @@ const LIVE: LabAttack[] = [
         title: "The thief signs a request with the stolen key",
         caption: "The request is well-formed and signed with the real device key. It goes to node-a.",
         run: (c) => {
-          const d = sendTo(c.cluster, "node-a", request(c.cluster, device(c.cluster)), "stolen phone");
+          const d = sendTo(c.cluster, "node-a", request(c.cluster, device(c.cluster), "node-a"), "stolen phone");
           return { checks: nodeChecks(d.reason), tone: d.decision === "deny" ? "good" : "bad", evidence: `node-a: ${d.decision} (${d.reason}), policy epoch ${d.epoch}` };
         },
       },
@@ -228,7 +230,7 @@ const LIVE: LabAttack[] = [
         title: "Every other node refuses it too",
         caption: "The thief tries the other nodes. Each one enforces the same signed policy independently.",
         run: (c) => {
-          const out = NODE_NAMES.slice(1).map((n) => [n, sendTo(c.cluster, n, request(c.cluster, device(c.cluster)), "stolen phone")] as const);
+          const out = NODE_NAMES.slice(1).map((n) => [n, sendTo(c.cluster, n, request(c.cluster, device(c.cluster), n), "stolen phone")] as const);
           const all = out.every(([, d]) => d.decision === "deny");
           return { tone: all ? "good" : "bad", checks: out.map(([n, d]) => ({ name: `${n}: device not revoked`, pass: d.decision === "allow" })), evidence: `${out.map(([n, d]) => `${n}: ${d.decision} (${d.reason})`).join(" · ")}. ${all ? "Blocked everywhere." : ""}` };
         },
@@ -264,7 +266,7 @@ const LIVE: LabAttack[] = [
         title: "maya sends a genuine request",
         caption: "Signed with her new phone's key, a fresh timestamp and a random nonce. node-b allows it.",
         run: (c) => {
-          const req = request(c.cluster, device(c.cluster));
+          const req = request(c.cluster, device(c.cluster), "node-b");
           c.set("captured", req);
           const d = sendTo(c.cluster, "node-b", req, "maya");
           return { checks: nodeChecks(d.reason), tone: d.decision === "allow" ? "good" : "bad", evidence: `node-b: ${d.decision} (${d.reason}); nonce ${short(req.nonce, 8)}` };
@@ -286,6 +288,15 @@ const LIVE: LabAttack[] = [
         run: (c) => {
           const d = sendTo(c.cluster, "node-b", c.get<SignedAccessRequest>("captured"), "replay");
           return { checks: nodeChecks(d.reason), tone: d.decision === "deny" ? "good" : "bad", evidence: `node-b: ${d.decision} (${d.reason}). Nonces are stored on disk, so even a node restart would not reset them.` };
+        },
+      },
+      {
+        actor: "attacker",
+        title: "Replay to another node",
+        caption: "node-c has never seen this nonce. But the signed request names node-b as its audience, so node-c refuses it: rejected on one node means rejected on every node.",
+        run: (c) => {
+          const d = sendTo(c.cluster, "node-c", c.get<SignedAccessRequest>("captured"), "replay to node-c");
+          return { checks: nodeChecks(d.reason), tone: d.decision === "deny" ? "good" : "bad", evidence: `node-c: ${d.decision} (${d.reason}). The target node is inside the ML-DSA signature, so it cannot be changed.` };
         },
       },
     ],

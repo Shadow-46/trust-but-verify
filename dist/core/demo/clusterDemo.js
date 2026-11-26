@@ -35,10 +35,12 @@ const sleep = (ms        ) => new Promise((r) => setTimeout(r, ms));
                                                                   
                                                                                               
 
-function request(d        , extra                         = {}) {
+/** A request signed for one target node (audience binding: it is refused on every other node). */
+function request(d        , node        , extra                         = {}) {
   const r                = {
     actor: d.owner,
     device_id: d.id,
+    node,
     key_version: 1,
     op: "request",
     transfer_id: null,
@@ -81,11 +83,11 @@ export async function runClusterDemo(outFile        )                   {
   // Views read each node's own adopted policy (written by that node's process).
   const views = NODE_NAMES.map((n, i) => new ClusterNode(n, dirs[i], cp.anchor, join(base, "unused")));
   const steps         = [];
-  const check = (step        , expect        , build                                  , want          ) => {
+  const check = (step        , expect        , build                                              , want          ) => {
     const observed                         = {};
     const got = views.map((v) => {
       v.reloadLocal();
-      const d = v.authorize(build());
+      const d = v.authorize(build(v.name));
       observed[v.name] = `${d.decision} (${d.reason})`;
       return d.decision;
     });
@@ -103,17 +105,17 @@ export async function runClusterDemo(outFile        )                   {
     const laptop = await enrol("maya", "maya-laptop");
     const omar = await enrol("omar", "omar-laptop");
 
-    check("normal operation", "enrolled devices allowed on every node", () => request(phone), all("allow"));
+    check("normal operation", "enrolled devices allowed on every node", (n) => request(phone, n), all("allow"));
 
     // Goal 2: device loss -> revoke only that device, measure propagation.
     const t0 = Date.now();
     const adopted = await waitForEpoch(dirs, cp.revokeDevice("maya-phone", t0));
     const samples = [Math.max(...adopted) - t0];
-    check("lost device after revocation", "maya-phone denied on every node", () => request(phone), all("deny"));
-    check("owner's other device", "maya-laptop still allowed", () => request(laptop), all("allow"));
-    check("other users", "omar unaffected", () => request(omar), all("allow"));
+    check("lost device after revocation", "maya-phone denied on every node", (n) => request(phone, n), all("deny"));
+    check("owner's other device", "maya-laptop still allowed", (n) => request(laptop, n), all("allow"));
+    check("other users", "omar unaffected", (n) => request(omar, n), all("allow"));
     const phone2 = await enrol("maya", "maya-phone-2");
-    check("re-enrolment", "new device for maya allowed", () => request(phone2), all("allow"));
+    check("re-enrolment", "new device for maya allowed", (n) => request(phone2, n), all("allow"));
 
     for (let i = 1; i < SAMPLES; i++) {
       await enrol("sampler", `sample-${i}`);
@@ -125,16 +127,16 @@ export async function runClusterDemo(outFile        )                   {
     // Goal 1: key rotation with a documented cutoff and in-flight transfers.
     const rot = cp.rotateKey();
     await waitForEpoch(dirs, rot.epoch);
-    check("rotation grace period", "old key v1 still accepted before cutoff", () => request(laptop), all("allow"));
+    check("rotation grace period", "old key v1 still accepted before cutoff", (n) => request(laptop, n), all("allow"));
     views.forEach((v, i) => {
       v.reloadLocal();
-      v.authorize(request(laptop, { op: "begin_transfer", transfer_id: `tx-${i}` }));
+      v.authorize(request(laptop, v.name, { op: "begin_transfer", transfer_id: `tx-${i}` }));
     });
     await sleep(Math.max(0, rot.cutoff - Date.now()) + 20);
-    check("after cutoff", "new requests with old key v1 rejected on every node", () => request(laptop), all("deny"));
+    check("after cutoff", "new requests with old key v1 rejected on every node", (n) => request(laptop, n), all("deny"));
     const observed                         = {};
     const chunkResults = views.map((v, i) => {
-      const d = v.authorize(request(laptop, { op: "chunk", transfer_id: `tx-${i}` }));
+      const d = v.authorize(request(laptop, v.name, { op: "chunk", transfer_id: `tx-${i}` }));
       observed[v.name] = `${d.decision} (${d.reason})`;
       return d.decision;
     });
@@ -144,7 +146,7 @@ export async function runClusterDemo(outFile        )                   {
       observed,
       pass: chunkResults.every((d) => d === "allow"),
     });
-    check("new key", "requests with key v2 allowed", () => request(laptop, { key_version: rot.newVersion }), all("allow"));
+    check("new key", "requests with key v2 allowed", (n) => request(laptop, n, { key_version: rot.newVersion }), all("allow"));
 
     const sorted = [...samples].sort((a, b) => a - b);
     const evidence = {

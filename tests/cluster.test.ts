@@ -29,10 +29,12 @@ function cluster(names = ["node-a", "node-b", "node-c"]) {
   return { base, cp, nodes, syncAll, device, t0 };
 }
 
+/** A request signed for one target node (default node-a); every other node refuses it (wrong_node). */
 function req(d: Device, now: number, extra: Partial<AccessRequest> = {}) {
   const r: AccessRequest = {
     actor: d.owner,
     device_id: d.id,
+    node: "node-a",
     key_version: 1,
     op: "request" as RequestOp,
     transfer_id: null,
@@ -43,8 +45,9 @@ function req(d: Device, now: number, extra: Partial<AccessRequest> = {}) {
   return signRequest(d.keys.privateKey, r);
 }
 
-const decisions = (nodes: ClusterNode[], r: ReturnType<typeof req>, now: number) =>
-  nodes.map((n) => n.authorize(r, now).decision);
+/** Each node gets its own request, signed for that node (audience binding). */
+const decisions = (nodes: ClusterNode[], build: (node: string) => ReturnType<typeof req>, now: number) =>
+  nodes.map((n) => n.authorize(build(n.name), now).decision);
 
 test("signed device requests are allowed; forged, replayed and stale ones are denied", () => {
   const { nodes, syncAll, device } = cluster();
@@ -52,8 +55,9 @@ test("signed device requests are allowed; forged, replayed and stale ones are de
   const intruder = { ...laptop, keys: generateSigningKeyPair() }; // claims maya's device id
   syncAll();
   const now = Date.now();
+  assert.deepEqual(nodes.map((n) => n.authorize(req(laptop, now, { node: n.name }), now).reason), ["authorized", "authorized", "authorized"]);
   const ok = req(laptop, now);
-  assert.deepEqual(nodes.map((n) => n.authorize(ok, now).reason), ["authorized", "authorized", "authorized"]);
+  assert.equal(nodes[0].authorize(ok, now).reason, "authorized");
   assert.equal(nodes[0].authorize(ok, now).reason, "replayed_request");
   assert.equal(nodes[0].authorize(req(intruder, now), now).reason, "bad_signature");
   assert.equal(nodes[0].authorize(req(laptop, now - 60_000), now).reason, "stale_or_future_request");
@@ -72,21 +76,21 @@ test("lost device: revocation reaches every node, owner re-enrols, other users k
   cp.revokeDevice("maya-phone", revokedAt);
   // Only node-a has synced so far: the others still enforce the previous epoch.
   nodes[0].sync(revokedAt);
-  assert.deepEqual(decisions(nodes, req(phone, revokedAt), revokedAt), ["deny", "allow", "allow"]);
+  assert.deepEqual(decisions(nodes, (n) => req(phone, revokedAt, { node: n }), revokedAt), ["deny", "allow", "allow"]);
   syncAll(revokedAt + 5);
-  assert.deepEqual(decisions(nodes, req(phone, revokedAt + 5), revokedAt + 5), ["deny", "deny", "deny"]);
-  assert.equal(nodes[1].authorize(req(phone, revokedAt + 6), revokedAt + 6).reason, "device_revoked");
+  assert.deepEqual(decisions(nodes, (n) => req(phone, revokedAt + 5, { node: n }), revokedAt + 5), ["deny", "deny", "deny"]);
+  assert.equal(nodes[1].authorize(req(phone, revokedAt + 6, { node: "node-b" }), revokedAt + 6).reason, "device_revoked");
 
   // Same owner, other device, and other users are unaffected.
-  assert.deepEqual(decisions(nodes, req(laptop, revokedAt + 7), revokedAt + 7), ["allow", "allow", "allow"]);
-  assert.deepEqual(decisions(nodes, req(omar, revokedAt + 8), revokedAt + 8), ["allow", "allow", "allow"]);
+  assert.deepEqual(decisions(nodes, (n) => req(laptop, revokedAt + 7, { node: n }), revokedAt + 7), ["allow", "allow", "allow"]);
+  assert.deepEqual(decisions(nodes, (n) => req(omar, revokedAt + 8, { node: n }), revokedAt + 8), ["allow", "allow", "allow"]);
 
   // Re-enrolment with a brand-new key pair.
   const phone2 = device("maya", "maya-phone-2");
   syncAll();
   const now = Date.now();
-  assert.deepEqual(decisions(nodes, req(phone2, now), now), ["allow", "allow", "allow"]);
-  assert.deepEqual(decisions(nodes, req(phone, now + 1), now + 1), ["deny", "deny", "deny"]);
+  assert.deepEqual(decisions(nodes, (n) => req(phone2, now, { node: n }), now), ["allow", "allow", "allow"]);
+  assert.deepEqual(decisions(nodes, (n) => req(phone, now + 1, { node: n }), now + 1), ["deny", "deny", "deny"]);
 });
 
 test("revoking an identity disables all of its devices on every node", () => {
@@ -96,7 +100,7 @@ test("revoking an identity disables all of its devices on every node", () => {
   cp.revokeActor("omar");
   syncAll();
   const now = Date.now();
-  for (const d of [a, b]) assert.deepEqual(decisions(nodes, req(d, now), now), ["deny", "deny", "deny"]);
+  for (const d of [a, b]) assert.deepEqual(decisions(nodes, (n) => req(d, now, { node: n }), now), ["deny", "deny", "deny"]);
 });
 
 test("key rotation: old version accepted until the cutoff, then rejected everywhere; in-flight transfers finish", () => {
@@ -111,28 +115,28 @@ test("key rotation: old version accepted until the cutoff, then rejected everywh
 
   // During the grace period both versions work, and a transfer starts on v1 at every node.
   const before = t + GRACE - 10;
-  assert.deepEqual(decisions(nodes, req(laptop, before, { key_version: 1 }), before), ["allow", "allow", "allow"]);
-  assert.deepEqual(decisions(nodes, req(laptop, before, { key_version: 2 }), before), ["allow", "allow", "allow"]);
+  assert.deepEqual(decisions(nodes, (n) => req(laptop, before, { key_version: 1, node: n }), before), ["allow", "allow", "allow"]);
+  assert.deepEqual(decisions(nodes, (n) => req(laptop, before, { key_version: 2, node: n }), before), ["allow", "allow", "allow"]);
   for (const n of nodes) {
-    const begin = req(laptop, before, { key_version: 1, op: "begin_transfer", transfer_id: `tx-${n.name}` });
+    const begin = req(laptop, before, { key_version: 1, op: "begin_transfer", transfer_id: `tx-${n.name}`, node: n.name });
     assert.equal(n.authorize(begin, before).decision, "allow");
   }
 
   // After the cutoff: new v1 requests and new v1 transfers are rejected on every node ...
   const after = cutoff + 1;
-  const reasons = nodes.map((n) => n.authorize(req(laptop, after, { key_version: 1 }), after).reason);
+  const reasons = nodes.map((n) => n.authorize(req(laptop, after, { key_version: 1, node: n.name }), after).reason);
   assert.deepEqual(reasons, ["key_version_retired", "key_version_retired", "key_version_retired"]);
   const lateBegin = req(laptop, after, { key_version: 1, op: "begin_transfer", transfer_id: "tx-late" });
   assert.equal(nodes[0].authorize(lateBegin, after).reason, "key_version_retired");
   // ... while transfers authorized before the cutoff complete on their original version.
   for (const n of nodes) {
-    const chunk = req(laptop, after, { key_version: 1, op: "chunk", transfer_id: `tx-${n.name}` });
+    const chunk = req(laptop, after, { key_version: 1, op: "chunk", transfer_id: `tx-${n.name}`, node: n.name });
     assert.equal(n.authorize(chunk, after).reason, "in_flight_transfer");
   }
   // A chunk cannot ride on a transfer it does not own.
   const hijack = req(laptop, after, { key_version: 1, op: "chunk", transfer_id: "tx-never-started" });
   assert.equal(nodes[0].authorize(hijack, after).reason, "unknown_transfer");
-  assert.deepEqual(decisions(nodes, req(laptop, after, { key_version: 2 }), after), ["allow", "allow", "allow"]);
+  assert.deepEqual(decisions(nodes, (n) => req(laptop, after, { key_version: 2, node: n }), after), ["allow", "allow", "allow"]);
 });
 
 test("revoking a device stops its in-flight transfer, and unknown ops are denied", () => {

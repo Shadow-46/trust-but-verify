@@ -20,10 +20,31 @@ function cluster() {
     n.sync();
     return n;
   };
-  const req = (op: AccessRequest["op"], transfer_id: string | null = null) =>
-    signRequest(phone.privateKey, { actor: "maya", device_id: "maya-phone", key_version: 1, op, transfer_id, nonce: randomBytes(8).toString("hex"), ts: Date.now() });
+  const req = (op: AccessRequest["op"], transfer_id: string | null = null, node = "node-a") =>
+    signRequest(phone.privateKey, { actor: "maya", device_id: "maya-phone", node, key_version: 1, op, transfer_id, nonce: randomBytes(8).toString("hex"), ts: Date.now() });
   return { base, cp, nodeDir, start, req };
 }
+
+test("rejected on every node: a request signed for node-a cannot be replayed to node-b or node-c, even after restarts", () => {
+  const { base, cp, start, req } = cluster();
+  const other = (name: string) => {
+    const n = new ClusterNode(name, join(base, name), cp.anchor, cp.paths.published);
+    n.sync();
+    return n;
+  };
+  const r = req("request"); // captured on the wire, valid signature, inside the ±30 s window
+  assert.equal(start().authorize(r).reason, "authorized");
+  assert.equal(start().authorize(r).reason, "replayed_request");
+  for (const name of ["node-b", "node-c"]) {
+    assert.deepEqual([other(name).authorize(r).decision, other(name).authorize(r).reason], ["deny", "wrong_node"]);
+    // A "restarted" node (new instance, same directory, empty memory) still refuses it.
+    assert.equal(other(name).authorize(r).reason, "wrong_node");
+  }
+  // The audience cannot be edited: changing the target node breaks the ML-DSA signature.
+  assert.equal(other("node-b").authorize({ ...r, node: "node-b" }).reason, "bad_signature");
+  // A request genuinely signed for node-b is still allowed there.
+  assert.equal(other("node-b").authorize(req("request", null, "node-b")).reason, "authorized");
+});
 
 test("a replayed request is still refused after the node restarts", () => {
   const { start, req } = cluster();

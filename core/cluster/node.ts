@@ -21,6 +21,12 @@ export type RequestOp = "request" | "begin_transfer" | "chunk";
 export type AccessRequest = {
   actor: string;
   device_id: string;
+  /**
+   * The node this request is addressed to (audience binding). It is part of the signed bytes, so a
+   * captured request cannot be replayed to a different node: each node keeps its own nonce store,
+   * and without this a replay to another node inside the ±30 s window would be accepted there.
+   */
+  node: string;
   key_version: number;
   op: RequestOp;
   transfer_id: string | null;
@@ -40,7 +46,7 @@ export type NodeDecision = {
 /** The exact bytes a device signs: a fixed-order JSON array, so fields cannot be confused. */
 export function requestBytes(r: AccessRequest): Buffer {
   return Buffer.from(
-    JSON.stringify(["tbv/req/v1", r.actor, r.device_id, r.key_version, r.op, r.transfer_id, r.nonce, r.ts]),
+    JSON.stringify(["tbv/req/v2", r.actor, r.device_id, r.node, r.key_version, r.op, r.transfer_id, r.nonce, r.ts]),
     "utf8",
   );
 }
@@ -190,6 +196,9 @@ export class ClusterNode {
     if (!verifyBytes(Buffer.from(device.public_key, "base64"), requestBytes(req), signature)) {
       return this.deny("bad_signature");
     }
+    // Audience binding: the signed request names its target node. Rejected on one node means
+    // rejected on every node: a request captured on (or meant for) node-a is refused elsewhere.
+    if (req.node !== this.name) return this.deny("wrong_node");
     if (!Number.isFinite(req.ts) || Math.abs(now - req.ts) > MAX_CLOCK_SKEW_MS) return this.deny("stale_or_future_request");
 
     // Replay nonces and transfers live on disk (under the node's lock), so a restarted node,
