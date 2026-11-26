@@ -7,6 +7,7 @@ import { loadPolicy, parseApprovals, parseEventsCsv } from "./detector/ingest.js
 import { generate } from "./detector/synth.js";
 import { openContext } from "./vault.js";
 import { securityAlerts } from "./defense/guard.js";
+import { listAttacks, runAttack } from "./demo/attacks.js";
 import { createBackup, restoreBackup } from "./backup.js";
 import { rotateStoredDataKey } from "./keys/rotation.js";
 import { statePaths } from "./store/paths.js";
@@ -68,6 +69,12 @@ export function runOps(argv          )                                 {
           alerts: report.alerts.map((a) => ({ id: a.alert_id, rule: a.rule, severity: a.severity, actor: a.actor, summary: a.summary, events: a.event_ids, services: a.services, limits: a.limits, detected_at: a.detected_at_received_utc })),
         },
       };
+    }
+    case "attacks":
+      return { code: 0, out: listAttacks() };
+    case "attack": {
+      const results = runAttack(arg ?? "all");
+      return { code: results.every((r) => r.blocked) ? 0 : 1, out: results };
     }
     case "alerts":
       return { code: 0, out: securityAlerts(paths) };
