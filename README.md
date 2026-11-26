@@ -6,8 +6,8 @@ when an identity gains unexpected privileges or moves between services.
 
 Built for Yugaantar DevForge 2026, Track 4.
 
-> Work in progress: the protected-resource service is complete; key rotation,
-> multi-node revocation, recovery, messaging and the detector are being added.
+> Work in progress: the protected-resource service, key rotation and multi-node revocation are
+> complete; crash recovery, backups, signed logs, messaging and the detector are being added.
 
 ## Clean-machine setup
 Requirements: **Node.js 24.11.1 or newer**. Nothing else — the service uses only
@@ -16,7 +16,7 @@ Node built-ins, so there is no `npm install` for the core.
 ```sh
 git clone https://github.com/Shadow-46/trust-but-verify.git
 cd trust-but-verify
-npm test                     # 16 tests (one is Linux-only and skipped on Windows)
+npm test                     # 25 tests (one is Linux-only and skipped on Windows)
 ```
 
 Run one request (the judging worker does exactly this, one process per request):
@@ -58,6 +58,33 @@ Malformed input returns a fixed error code such as `{"error":"invalid_actor"}` a
 - **Hardened I/O:** IDs are opaque (stored in `Map`s, never used as paths or object keys); atomic
   writes (temp + fsync + rename); cross-process lock; the state directory must be a private,
   self-owned directory (planted symlinks are refused); secrets never reach stdout, stderr or errors.
+
+## Key rotation and revocation across nodes (goals 1–2)
+`core/cluster/`: a **control plane** is the only writer of policy (enrolled devices, revoked
+identities and devices, key versions). Every change is published as a new **epoch signed with
+ML-DSA-65**. Each **node** pulls the policy, verifies the signature against a trust anchor
+provisioned out of band, and adopts it only if its epoch is higher than the one it holds, so a forged
+policy or a replayed older one (e.g. from before a revocation) is refused. Nodes keep enforcing
+their last verified policy if the control plane is unreachable, including after a restart.
+
+Every request is signed by an enrolled **device key** (ML-DSA-65) and checked for owner, device
+status, identity revocation, signature, timestamp (±30 s) and nonce (replay), then key version.
+
+- **Key rotation — grace period: yes.** Rotating activates version *n+1*; version *n* stays valid for
+  new requests until `cutoff = rotation time + grace_ms` (30 s by default, 1.5 s in the demo).
+  From the cutoff on, every node rejects new requests and new transfers that use version *n*
+  (`key_version_retired`). Transfers that a node authorized **before** the cutoff may finish on
+  version *n* (at most 120 s). Stored assets are re-encrypted under the new data key in one atomic
+  state replace (`rotateStoredDataKey`).
+- **Device loss:** revoking a device stops only that device on every node; the owner enrols a new
+  device (new key pair) and other users keep access. Revoking an identity stops all its devices.
+- **Measured propagation** (`evidence/t6-cluster.json`, Docker `node:24.11.1`, 3 node processes,
+  20 ms polling, 15 samples): revocation published → last node enforcing **median 18 ms, max 19 ms**.
+  Bound: one polling interval plus verification; all nodes share one host clock in this run.
+
+```sh
+npm run demo:cluster        # runs the scenario and rewrites evidence/t6-cluster.json
+```
 
 ## Performance
 One request = one Node process. Measured in Docker `node:24.11.1` on a native filesystem:
