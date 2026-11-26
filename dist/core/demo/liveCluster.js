@@ -4,8 +4,47 @@ import { existsSync, mkdirSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { ControlPlane } from "../cluster/control.js";
 import { ClusterNode, signRequest } from "../cluster/node.js";
+import { readAudit, verifyAudit } from "../audit/log.js";
 import { generateSigningKeyPair } from "../crypto/sign.js";
+import { alertFromRecord } from "../defense/guard.js";
+                                                         
 import { appendDurable, atomicWriteFile, readTextIfExists } from "../store/fsx.js";
+import { statePaths } from "../store/paths.js";
+
+/** Each node's own signed decision log (metadata only, never keys), tagged with the node, newest last. */
+export function clusterLog(dir        , limit = 40) {
+  return NODE_NAMES.flatMap((service) => {
+    try {
+      return readAudit(statePaths(join(dir, service)))
+        .slice(-limit)
+        .map(({ seq, ts, type, request_id, actor, asset, decision, reason, hash }) => ({ service, seq, ts, type, request_id, actor, asset, decision, reason, hash: hash.slice(0, 12) }));
+    } catch {
+      return [];
+    }
+  })
+    .sort((a, b) => a.ts.localeCompare(b.ts))
+    .slice(-limit);
+}
+
+/** Signed security alerts raised by the nodes, each naming identity, service (node) and event. */
+export function clusterAlerts(dir        , limit = 20)                                          {
+  return NODE_NAMES.flatMap((service) => {
+    try {
+      return readAudit(statePaths(join(dir, service)))
+        .filter((r) => r.type === "security_alert")
+        .map((r) => alertFromRecord(r, service));
+    } catch {
+      return [];
+    }
+  })
+    .sort((a, b) => a.ts.localeCompare(b.ts))
+    .slice(-limit);
+}
+
+/** Verify every node's decision log (hash chain + ML-DSA signatures). */
+export function verifyClusterLogs(dir        ) {
+  return Object.fromEntries(NODE_NAMES.map((n) => [n, verifyAudit(statePaths(join(dir, n)))]));
+}
 
 /**
  * Live cluster demo state on disk, driven by the operator console. The node
@@ -47,7 +86,7 @@ export function clusterStatus(dir        ) {
     const req = signRequest(Buffer.from(d.privateKey, "base64"), {
       actor: "maya", device_id: d.device_id, node: name, key_version: cp.policy.active_key, op: "request", transfer_id: null, nonce: randomBytes(8).toString("hex"), ts: Date.now(),
     });
-    const decision = view.authorize(req);
+    const decision = view.probe(req); // status probe: no nonce consumed, nothing logged
     return { name, epoch: ack.epoch, adopted_at: ack.adopted_at, decision: decision.decision, reason: decision.reason };
   });
   return { ready: true, published_epoch: cp.policy.epoch, published_at: cp.policy.issued_at, device: d.device_id, nodes, control: controlView(dir), attempts: recentAttempts(dir) };

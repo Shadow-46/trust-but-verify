@@ -22,7 +22,11 @@ export type AuditType =
   | "revoke"
   | "key_rotation"
   | "backup_restored"
-  | "security_alert";
+  | "security_alert"
+  // cluster nodes keep their own log in the same format
+  | "node_decision"
+  | "policy_adopted"
+  | "policy_rejected";
 
 export type AuditFields = {
   type: AuditType;
@@ -65,7 +69,11 @@ export function readAudit(paths: StatePaths): AuditRecord[] {
     });
 }
 
-export function appendAudit(paths: StatePaths, fields: AuditFields, existing?: AuditRecord[]): AuditRecord {
+/**
+ * `witness: false` is for logs other than the service's own (e.g. each cluster node's decision log):
+ * the external witness holds the service log's head only, and must never be overwritten by another log.
+ */
+export function appendAudit(paths: StatePaths, fields: AuditFields, existing?: AuditRecord[], opts: { witness?: boolean } = {}): AuditRecord {
   const records = existing ?? readAudit(paths);
   const last = records.at(-1);
   const base = {
@@ -85,7 +93,7 @@ export function appendAudit(paths: StatePaths, fields: AuditFields, existing?: A
   appendDurable(paths.audit, JSON.stringify(record));
   // Signed head: lets a load detect a log whose tail was cut off after the last state save.
   atomicWriteFile(paths.auditHead, JSON.stringify({ seq: record.seq, hash: record.hash, sig: record.sig }));
-  publishHead({ seq: record.seq, hash: record.hash, sig: record.sig });
+  if (opts.witness !== false) publishHead({ seq: record.seq, hash: record.hash, sig: record.sig });
   return record;
 }
 

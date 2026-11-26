@@ -1,7 +1,25 @@
 import { createHash } from "node:crypto";
 import { join } from "node:path";
-import { signBytes, verifyBytes } from "../crypto/sign.ts";
+import { appendAudit } from "../audit/log.ts";
+import type { AuditFields, AuditRecord } from "../audit/log.ts";
+import { generateSigningKeyPair, signBytes, verifyBytes } from "../crypto/sign.ts";
 import { atomicWriteFile, ensurePrivateDir, readTextIfExists, withLock } from "../store/fsx.ts";
+import { statePaths } from "../store/paths.ts";
+import type { StatePaths } from "../store/paths.ts";
+
+/** Opaque, bounded text for log fields (request fields arrive over the network, untyped). */
+const text = (v: unknown): string => (typeof v === "string" ? v.slice(0, 256) : String(v ?? "").slice(0, 256));
+
+/** Node denial reason → [alert rule, what it suggests]. */
+const NODE_ALERTS = new Map<string, [string, string]>([
+  ["replayed_request", ["replayed_request", "a request with an already-used nonce was presented again (captured and replayed)"]],
+  ["wrong_node", ["request_for_another_node", "a request signed for a different node was presented here (cross-node replay)"]],
+  ["bad_signature", ["bad_request_signature", "a request claiming an enrolled device failed its ML-DSA signature (forged or altered)"]],
+  ["device_revoked", ["revoked_device_used", "a revoked device is still signing requests (lost or stolen device)"]],
+  ["actor_revoked", ["revoked_identity_used", "a revoked identity is still sending requests"]],
+  ["stale_or_future_request", ["stale_request", "a request outside the ±30 s window (delayed replay or clock attack)"]],
+  ["unknown_device", ["unknown_device", "a request from a device that was never enrolled"]],
+]);
 import { verifyPolicy } from "./policy.ts";
 import type { Policy, SignedPolicy } from "./policy.ts";
 
@@ -161,11 +179,11 @@ export class ClusterNode {
     try {
       incoming = verifyPolicy(this.anchor, JSON.parse(text) as SignedPolicy);
     } catch {
-      return { status: "rejected", epoch: this.epoch, reason: "bad_signature" };
+      return this.rejectPolicy(text, "bad_signature", now);
     }
     const floor = this.belowTrust(incoming, text);
-    if (floor) return { status: "rejected", epoch: this.epoch, reason: floor };
-    if (incoming.epoch < this.epoch) return { status: "rejected", epoch: this.epoch, reason: "rollback" };
+    if (floor) return this.rejectPolicy(text, floor, now);
+    if (incoming.epoch < this.epoch) return this.rejectPolicy(text, "rollback", now);
     if (incoming.epoch === this.epoch) return { status: "unchanged", epoch: this.epoch };
     // Persist first, adopt in memory last: if either write fails, the next sync
     // retries the whole adoption instead of treating the epoch as already done.
@@ -173,16 +191,43 @@ export class ClusterNode {
     const adoptedAt = now ?? Date.now();
     atomicWriteFile(join(this.dir, "ack.json"), JSON.stringify({ node: this.name, epoch: incoming.epoch, adopted_at: adoptedAt }));
     this.policy = incoming;
+    // Logged after the ack, so propagation timing is not affected by the signature.
+    this.underLock(() => this.append({ type: "policy_adopted", request_id: `epoch-${incoming.epoch}`, actor: null, asset: null, decision: "allow", reason: `adopted policy epoch ${incoming.epoch}` }));
     return { status: "adopted", epoch: incoming.epoch };
+  }
+
+  /** A refused policy is logged and raises a signed alert (forged, too old, or below the provisioned floor). */
+  private rejectPolicy(text: string, reason: "bad_signature" | "rollback" | "below_floor" | "bootstrap_mismatch", now?: number): SyncResult {
+    let offered = "?";
+    try {
+      const e = (JSON.parse(JSON.parse(text).policy) as { epoch?: unknown }).epoch;
+      if (typeof e === "number" && Number.isSafeInteger(e)) offered = String(e);
+    } catch {
+      offered = "unreadable";
+    }
+    this.underLock(() => {
+      const rec = this.append({ type: "policy_rejected", request_id: `epoch-${offered}`, actor: null, asset: null, decision: "deny", reason });
+      const detail = reason === "bad_signature" ? "a policy not signed by the control plane was refused; the node keeps its last verified policy" : "a genuinely signed but older policy was refused (rollback attempt); the node keeps its newer policy";
+      this.alert("forged_or_old_policy", "unauthenticated sender", null, null, [`epoch-${offered}`], rec?.seq ?? null, detail, now ?? Date.now());
+    });
+    return { status: "rejected", epoch: this.epoch, reason };
+  }
+
+  /** Run `fn` under the node lock; logging must never break policy handling. */
+  private underLock(fn: () => void): void {
+    try {
+      withLock(this.dir, fn);
+    } catch {
+      // evidence only
+    }
   }
 
   private deny(reason: string): NodeDecision {
     return { node: this.name, epoch: this.epoch, decision: "deny", reason };
   }
 
-  /** Zero-trust check of one signed request against this node's verified policy. */
-  authorize(req: SignedAccessRequest, now = Date.now()): NodeDecision {
-    const p = this.policy;
+  /** Checks that need no replay state, in the order they run. null = passed so far. */
+  private precheck(req: SignedAccessRequest, p: Policy | null, now: number): NodeDecision | null {
     if (!p) return this.deny("no_policy");
     if (req.op !== "request" && req.op !== "begin_transfer" && req.op !== "chunk") return this.deny("invalid_op");
 
@@ -200,16 +245,111 @@ export class ClusterNode {
     // rejected on every node: a request captured on (or meant for) node-a is refused elsewhere.
     if (req.node !== this.name) return this.deny("wrong_node");
     if (!Number.isFinite(req.ts) || Math.abs(now - req.ts) > MAX_CLOCK_SKEW_MS) return this.deny("stale_or_future_request");
+    return null;
+  }
 
+  /**
+   * Zero-trust check of one signed request against this node's verified policy. Every
+   * decision (allow or deny) is appended to this node's own hash-chained, ML-DSA-signed
+   * decision log, and attack patterns raise signed security alerts there.
+   */
+  authorize(req: SignedAccessRequest, now = Date.now()): NodeDecision {
+    const p = this.policy;
+    const early = this.precheck(req, p, now);
     // Replay nonces and transfers live on disk (under the node's lock), so a restarted node,
     // or a second process on the same node directory, still refuses a replay and still
-    // lets an in-flight transfer finish.
+    // lets an in-flight transfer finish. The decision log is appended under the same lock.
     return withLock(this.dir, () => {
-      this.loadReplay(now);
-      const d = this.decide(req, p, now);
-      this.saveReplay();
+      let d: NodeDecision;
+      if (early || !p) {
+        d = early ?? this.deny("no_policy");
+      } else {
+        this.loadReplay(now);
+        d = this.decide(req, p, now);
+        this.saveReplay();
+      }
+      this.recordDecision(req, d, now);
       return d;
     });
+  }
+
+  /**
+   * The same checks as `authorize` without side effects: no nonce is consumed, nothing is
+   * logged and no alert is raised. Used by status probes (e.g. the live monitor polling).
+   */
+  probe(req: SignedAccessRequest, now = Date.now()): NodeDecision {
+    const p = this.policy;
+    const early = this.precheck(req, p, now);
+    if (early || !p) return early ?? this.deny("no_policy");
+    return withLock(this.dir, () => {
+      this.loadReplay(now);
+      return this.decide(req, p, now); // replay state is not saved
+    });
+  }
+
+  // ---------- per-node signed decision log and alerts ----------
+
+  /** This node's log uses the same layout as the service log: audit.jsonl, audit.head.json, keys/. */
+  get logPaths(): StatePaths {
+    return statePaths(this.dir);
+  }
+
+  /** The node's ML-DSA-65 log key, generated at runtime on first use (never shipped, never logged). */
+  private ensureLogKey(): void {
+    const p = this.logPaths;
+    if (readTextIfExists(p.auditKey) && readTextIfExists(p.auditPub)) return;
+    const kp = generateSigningKeyPair();
+    atomicWriteFile(p.auditKey, kp.privateKey.toString("base64"));
+    atomicWriteFile(p.auditPub, kp.publicKey.toString("base64"));
+  }
+
+  /** Append one record; evidence only, so a logging failure never changes a decision. Caller holds the lock. */
+  private append(fields: Omit<AuditFields, "state_version">): AuditRecord | null {
+    try {
+      this.ensureLogKey();
+      return appendAudit(this.logPaths, { ...fields, state_version: this.epoch }, undefined, { witness: false });
+    } catch {
+      return null;
+    }
+  }
+
+  private recordDecision(req: SignedAccessRequest, d: NodeDecision, now: number): void {
+    const actor = text(req.actor);
+    const device = text(req.device_id);
+    const nonce = text(req.nonce);
+    const rec = this.append({ type: "node_decision", request_id: nonce, actor, asset: device, decision: d.decision, reason: d.reason });
+    const rule = NODE_ALERTS.get(d.reason);
+    if (rule) this.alert(rule[0], `${actor} (device ${device})`, actor, device, [nonce], rec?.seq ?? null, rule[1], now);
+  }
+
+  /** One signed alert per rule, device and minute, in the shared parseable format. */
+  private alert(rule: string, identity: string, actor: string | null, asset: string | null, events: string[], seq: number | null, detail: string, now: number): void {
+    const file = join(this.dir, "defense.json");
+    let alerted: string[] = [];
+    try {
+      const parsed: unknown = JSON.parse(readTextIfExists(file) ?? "[]");
+      if (Array.isArray(parsed)) alerted = parsed.filter((x): x is string => typeof x === "string");
+    } catch {
+      alerted = [];
+    }
+    const key = `${rule}:${asset ?? identity}:${Math.floor(now / 60_000)}`;
+    if (alerted.includes(key)) return;
+    const ids = events.map((e) => (/^[\w.:-]+$/.test(e) ? e : JSON.stringify(e))).join(",") || "-";
+    const rec = this.append({
+      type: "security_alert",
+      request_id: events.at(-1) ?? null,
+      actor,
+      asset,
+      decision: null,
+      reason: `${rule}: identity=${identity} service=${this.name} events=${ids}${seq !== null ? ` seq=${seq}` : ""} — ${detail}`,
+    });
+    if (rec) {
+      try {
+        atomicWriteFile(file, JSON.stringify([...alerted, key].slice(-200)));
+      } catch {
+        // dedupe state is best effort
+      }
+    }
   }
 
   private loadReplay(now: number): void {

@@ -23,7 +23,11 @@ import { IntegrityError } from "../errors.js";
             
                   
                      
-                     
+                    
+                                                        
+                   
+                    
+                      
 
                            
                   
@@ -66,7 +70,11 @@ export function readAudit(paths            )                {
     });
 }
 
-export function appendAudit(paths            , fields             , existing                )              {
+/**
+ * `witness: false` is for logs other than the service's own (e.g. each cluster node's decision log):
+ * the external witness holds the service log's head only, and must never be overwritten by another log.
+ */
+export function appendAudit(paths            , fields             , existing                , opts                        = {})              {
   const records = existing ?? readAudit(paths);
   const last = records.at(-1);
   const base = {
@@ -86,7 +94,7 @@ export function appendAudit(paths            , fields             , existing    
   appendDurable(paths.audit, JSON.stringify(record));
   // Signed head: lets a load detect a log whose tail was cut off after the last state save.
   atomicWriteFile(paths.auditHead, JSON.stringify({ seq: record.seq, hash: record.hash, sig: record.sig }));
-  publishHead({ seq: record.seq, hash: record.hash, sig: record.sig });
+  if (opts.witness !== false) publishHead({ seq: record.seq, hash: record.hash, sig: record.sig });
   return record;
 }
 

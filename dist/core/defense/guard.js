@@ -182,13 +182,22 @@ export function observeFailure(paths            , kind                         ,
   
 
 /** Parse `<rule>: identity=… service=… events=… [seq=n] — <detail>`; older records degrade gracefully. */
-function parseReason(reason        )                                                   {
+function parseReason(reason        )                                                                                                    {
   const colon = reason.indexOf(": ");
   const rule = colon === -1 ? reason : reason.slice(0, colon);
   const rest = colon === -1 ? "" : reason.slice(colon + 2);
-  const m = /^identity=.* service=.* events=(.*?)(?: seq=(\d+))? — ([\s\S]*)$/.exec(rest);
-  if (!m) return { rule, events: "-", detail: rest };
-  return { rule, events: m[2] ? `${m[1]} (audit seq ${m[2]})` : m[1], detail: m[3] };
+  const m = /^identity=(.*) service=(.*?) events=(.*?)(?: seq=(\d+))? — ([\s\S]*)$/.exec(rest);
+  if (!m) return { rule, identity: null, service: null, events: "-", detail: rest };
+  return { rule, identity: m[1], service: m[2], events: m[4] ? `${m[3]} (audit seq ${m[4]})` : m[3], detail: m[5] };
+}
+
+/** A `security_alert` audit record (from the service or a cluster node) as an alert naming identity, service and event. */
+export function alertFromRecord(r             , defaultService = SERVICE)                {
+  const p = parseReason(r.reason ?? "");
+  return {
+    seq: r.seq, ts: r.ts, actor: r.actor, asset: r.asset, rule: p.rule, detail: p.detail,
+    identity: p.identity ?? r.actor ?? UNAUTHENTICATED, service: p.service ?? defaultService, events: p.events,
+  };
 }
 
 export function securityAlerts(paths            )                  {
@@ -196,9 +205,9 @@ export function securityAlerts(paths            )                  {
   try {
     logged = readAudit(paths)
       .filter((r) => r.type === "security_alert")
-      .map(({ seq, ts, actor, asset, reason }) => {
-        const p = parseReason(reason ?? "");
-        return { seq, ts, actor, asset, rule: p.rule, detail: p.detail, identity: actor ?? UNAUTHENTICATED, service: SERVICE, events: p.events };
+      .map((r) => {
+        const a = alertFromRecord(r);
+        return { ...a, identity: r.actor ?? UNAUTHENTICATED, service: SERVICE }; // the service's own log: authoritative fields
       });
   } catch {
     // the log itself failed verification; the side file still reports it

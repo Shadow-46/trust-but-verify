@@ -11,7 +11,7 @@ import { listAttacks, runAttack } from "./demo/attacks.js";
 import { messagingDemo } from "./demo/messagingDemo.js";
 import { netClusterBench, netMessagingDemo } from "./demo/network.js";
 import { labCatalog, labRuns, labStart, labStep } from "./demo/liveLab.js";
-import { clusterEnrol, clusterInit, clusterRevoke, clusterStatus } from "./demo/liveCluster.js";
+import { clusterAlerts, clusterEnrol, clusterInit, clusterLog, clusterRevoke, clusterStatus, verifyClusterLogs } from "./demo/liveCluster.js";
 import { createBackup, restoreBackup } from "./backup.js";
 import { rotateStoredDataKey } from "./keys/rotation.js";
 import { statePaths } from "./store/paths.js";
@@ -19,6 +19,7 @@ import { statePaths } from "./store/paths.js";
 /**
  * Operator commands (JSON output, never secrets):
  *   npm run ops -- verify-log        verify audit chain + ML-DSA signatures
+ *   npm run ops -- verify-log <dir>  verify each cluster node's own signed decision log
  *   npm run ops -- backup <file>     signed, digested backup of state + audit log
  *   npm run ops -- restore <file>    verify, then restore (revocations are kept)
  *   npm run ops -- rotate            rotate the stored data key
@@ -29,6 +30,10 @@ export function runOps(argv          )                                 {
   const paths = statePaths();
   switch (cmd) {
     case "verify-log": {
+      if (arg) {
+        const all = verifyClusterLogs(resolve(arg));
+        return { code: Object.values(all).every((v) => v.ok) ? 0 : 1, out: all };
+      }
       const v = verifyAudit(paths);
       return { code: v.ok ? 0 : 1, out: v };
     }
@@ -123,6 +128,8 @@ export function runOps(argv          )                                 {
           log: part(() => runOps(["audit-log"]).out),
           alerts: part(() => securityAlerts(paths).slice(-20)),
           cluster: arg ? part(() => clusterStatus(resolve(arg))) : null,
+          node_log: arg ? part(() => clusterLog(resolve(arg))) : [],
+          node_alerts: arg ? part(() => clusterAlerts(resolve(arg))) : [],
         },
       };
     }
