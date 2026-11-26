@@ -13,11 +13,21 @@ import { networkInterfaces } from "node:os";
 
 const TARGET = { host: "127.0.0.1", port: Number(process.env.CONSOLE_PORT ?? 3000) };
 const PORT = Number(process.env.LAN_PORT ?? 3001);
-const READ_ONLY = new Set(["monitor", "session-get", "state", "log", "alerts", "evidence", "attacks", "cluster-status", "lab-runs"]);
+const READ_ONLY = new Set(["monitor", "session-get", "state", "log", "alerts", "evidence", "attacks", "cluster-status", "lab-runs", "lab-catalog"]);
 const MAX_BODY = 16 * 1024;
 
+// Present every forwarded request as same-origin to the console. Next's dev server refuses
+// cross-origin dev resources and its hot-reload socket, which leaves pages un-hydrated (blank).
+const SELF = `http://${TARGET.host}:${TARGET.port}`;
+function sameOrigin(h) {
+  const out = { ...h, host: `${TARGET.host}:${TARGET.port}` };
+  if (out.origin) out.origin = SELF;
+  if (out.referer) out.referer = out.referer.replace(/^https?:\/\/[^/]+/, SELF);
+  return out;
+}
+
 function forward(req, res, body) {
-  const headers = { ...req.headers, host: `${TARGET.host}:${TARGET.port}` };
+  const headers = sameOrigin(req.headers);
   if (body) headers["content-length"] = String(body.length);
   const up = request({ ...TARGET, method: req.method, path: req.url, headers }, (r) => {
     res.writeHead(r.statusCode ?? 502, r.headers);
@@ -64,7 +74,7 @@ const server = createServer((req, res) => {
 server.on("upgrade", (req, socket, head) => {
   if (!req.url?.startsWith("/_next/")) return socket.destroy();
   const up = connect(TARGET.port, TARGET.host, () => {
-    up.write(`${req.method} ${req.url} HTTP/${req.httpVersion}\r\n${Object.entries(req.headers).map(([k, v]) => `${k}: ${v}`).join("\r\n")}\r\n\r\n`);
+    up.write(`${req.method} ${req.url} HTTP/${req.httpVersion}\r\n${Object.entries(sameOrigin(req.headers)).map(([k, v]) => `${k}: ${v}`).join("\r\n")}\r\n\r\n`);
     up.write(head);
     socket.pipe(up).pipe(socket);
   });

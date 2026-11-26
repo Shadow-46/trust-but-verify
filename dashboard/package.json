@@ -7,6 +7,7 @@
     "build": "next build",
     "start": "next start -H 127.0.0.1",
     "lan": "node scripts/lan-proxy.mjs",
+    "demo": "next build && next start -H 127.0.0.1",
     "lint": "eslint",
     "typecheck": "next typegen && tsc --noEmit"
   },

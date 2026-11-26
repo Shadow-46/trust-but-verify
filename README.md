@@ -175,7 +175,9 @@ Three views, built for a two-laptop demo:
 Two laptops: the console binds to 127.0.0.1 only. On laptop A run `npm run dev` (or `npm run build &&
 npm run start`) and `npm run lan`; laptop B opens the printed `http://<laptop-A-IP>:3001/monitor`
 (allow Node through the firewall on a private network). The LAN gateway forwards pages and read-only
-actions and refuses every state-changing action, so nobody else on the Wi-Fi can drive the demo.
+actions and refuses every state-changing action, so nobody else on the Wi-Fi can drive the demo. Run the Attack Lab on
+laptop A itself at `http://localhost:3000/lab`: through the gateway it is view-only by design. For the
+smoothest demo use the production build: `npm run demo` (instead of `npm run dev`) plus `npm run lan`.
 
 ## Self-defence, witness and Attack Lab
 - **Detect and respond** (core/defense/guard.ts): the service watches its own traffic and writes ML-DSA-signed security_alert records for probing (one identity denied on 3+ files in 60 s), malformed-input bursts, use of a revoked identity, request-ID reuse and integrity failures (npm run ops -- alerts). With TRACK4_AUTO_QUARANTINE=1 a probing identity is also quarantined; this is off by default because actor IDs in the judged interface are caller-supplied, so automatic lockout could be abused to lock out a real user.
