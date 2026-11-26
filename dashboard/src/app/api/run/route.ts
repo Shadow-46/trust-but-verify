@@ -19,6 +19,8 @@ const SNAPSHOT = join(tmpdir(), "tbv-dashboard-snapshot.json");
 const WITNESS = join(tmpdir(), "tbv-dashboard-witness");
 const CLUSTER = join(tmpdir(), "tbv-dashboard-cluster");
 const SESSION = join(tmpdir(), "tbv-dashboard-session.json");
+const LAB = join(tmpdir(), "tbv-dashboard-lab");
+const LAB_CURRENT = join(LAB, "current.json");
 const SESSION_KEYS = ["checklist", "lastRead", "verify", "detector", "chat", "attackResults", "ripple"];
 const NODE_NAMES = ["node-a", "node-b", "node-c"];
 // Node processes and the policy server survive between requests (and dev hot reloads) on globalThis.
@@ -121,6 +123,12 @@ export async function POST(request: Request) {
   };
   try {
     switch (body.action) {
+      case "monitor": {
+        // Read-only snapshot for the Live Monitor (laptop B): state, log tail, alerts, cluster, Lab step.
+        const r = ops("monitor", ...(existsSync(join(CLUSTER, "demo-device.json")) ? [CLUSTER] : []));
+        const lab = existsSync(LAB_CURRENT) ? JSON.parse(readFileSync(LAB_CURRENT, "utf8")) : null;
+        return Response.json({ ...r, out: { ...(r.out as object), lab, running: Object.fromEntries(NODE_NAMES.map((n) => [n, nodes.has(n)])) } });
+      }
       case "session-get":
         return Response.json({ ok: true, out: existsSync(SESSION) ? JSON.parse(readFileSync(SESSION, "utf8")) : {} });
       case "session-set": {
