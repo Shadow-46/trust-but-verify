@@ -95,6 +95,26 @@ export function runOps(argv          )                                 {
     }
     case "alerts":
       return { code: 0, out: securityAlerts(paths) };
+    case "monitor": {
+      // One read-only snapshot for the Live Monitor (each part fails independently, never secrets).
+      const part =    (fn         ) => {
+        try {
+          return fn();
+        } catch (err) {
+          return { error: (err                     ).code ?? "unavailable" };
+        }
+      };
+      return {
+        code: 0,
+        out: {
+          at: Date.now(),
+          state: part(() => runOps(["state-summary"]).out),
+          log: part(() => runOps(["audit-log"]).out),
+          alerts: part(() => securityAlerts(paths).slice(-20)),
+          cluster: arg ? part(() => clusterStatus(resolve(arg))) : null,
+        },
+      };
+    }
     case "rotate":
       return { code: 0, out: rotateStoredDataKey(paths) };
   }
