@@ -38,10 +38,14 @@ function withEnv<T>(env: Record<string, string | undefined>, fn: () => T): T {
   }
 }
 
+// Attack instances are throwaway: they must never publish to the operator's witness
+// (that would make the real service see a "rollback" and fail closed).
+const isolated = (env: Record<string, string | undefined>) => ({ TRACK4_WITNESS_DIR: undefined, ...env });
+
 function instance(env: Record<string, string | undefined> = {}) {
   const dir = mkdtempSync(join(tmpdir(), "tbv-attack-"));
   const paths = statePaths(dir);
-  const call = (req: unknown, raw?: string) => withEnv(env, () => handle(raw ?? JSON.stringify(req), paths).body as Body);
+  const call = (req: unknown, raw?: string) => withEnv(isolated(env), () => handle(raw ?? JSON.stringify(req), paths).body as Body);
   call(SETUP);
   return { dir, paths, call };
 }
@@ -101,7 +105,7 @@ const ATTACKS: Attack[] = [
   },
   {
     id: "probing", name: "Probe other users' files", attack: "A valid account tries many files it does not own.", defense: "Probing detection, signed alert and (where enabled) quarantine.",
-    run: () => { const { paths, call } = instance({ TRACK4_AUTO_QUARANTINE: "1" }); for (const [i, a] of ["design-doc", "secret-1", "secret-2"].entries()) call({ op: "read", actor: "omar", asset: a, request_id: `p${i}` }); const own = withEnv({ TRACK4_AUTO_QUARANTINE: "1" }, () => handle(JSON.stringify({ op: "read", actor: "omar", asset: "payroll.xlsx", request_id: "own" }), paths).body as Body); const rules = securityAlerts(paths).map((a) => a.rule); return { blocked: rules.includes("probing") && own.decision === "deny", evidence: `alerts: ${rules.join(", ")}; omar quarantined` }; },
+    run: () => { const { paths, call } = instance({ TRACK4_AUTO_QUARANTINE: "1" }); for (const [i, a] of ["design-doc", "secret-1", "secret-2"].entries()) call({ op: "read", actor: "omar", asset: a, request_id: `p${i}` }); const own = withEnv(isolated({ TRACK4_AUTO_QUARANTINE: "1" }),() => handle(JSON.stringify({ op: "read", actor: "omar", asset: "payroll.xlsx", request_id: "own" }), paths).body as Body); const rules = securityAlerts(paths).map((a) => a.rule); return { blocked: rules.includes("probing") && own.decision === "deny", evidence: `alerts: ${rules.join(", ")}; omar quarantined` }; },
   },
   {
     id: "protected-read", name: "Steal content via protected_read", attack: "Ask for the encrypted proof of someone else's file, and send a malformed key.", defense: "Authorize before encapsulating; strict ML-KEM-768 key validation.",
