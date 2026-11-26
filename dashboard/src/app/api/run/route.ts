@@ -1,4 +1,5 @@
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
+import type { ChildProcess } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { copyFileSync, existsSync, mkdirSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -16,6 +17,23 @@ const ROOT = resolve(process.cwd(), "..");
 const STATE = join(tmpdir(), "tbv-dashboard");
 const SNAPSHOT = join(tmpdir(), "tbv-dashboard-snapshot.json");
 const WITNESS = join(tmpdir(), "tbv-dashboard-witness");
+const CLUSTER = join(tmpdir(), "tbv-dashboard-cluster");
+const NODE_NAMES = ["node-a", "node-b", "node-c"];
+// Node processes survive between requests (and dev hot reloads) on globalThis.
+const g = globalThis as unknown as { __tbvNodes?: Map<string, ChildProcess> };
+const nodes = (g.__tbvNodes ??= new Map<string, ChildProcess>());
+function stopNode(name: string) {
+  nodes.get(name)?.kill();
+  nodes.delete(name);
+}
+function startNode(name: string) {
+  stopNode(name);
+  const p = spawn(process.execPath, [join(ROOT, "dist", "core", "cluster", "nodeProcess.js"), name, join(CLUSTER, name), join(CLUSTER, "control"), "20"], { stdio: "ignore" });
+  nodes.set(name, p);
+  p.on("exit", () => {
+    if (nodes.get(name) === p) nodes.delete(name);
+  });
+}
 const ID = /^[A-Za-z0-9._-]{1,64}$/;
 
 const DEMO = {
@@ -94,6 +112,28 @@ export async function POST(request: Request) {
         // Simulated attacker with disk access restores an older, validly authenticated state file.
         copyFileSync(SNAPSHOT, join(STATE, "state.json"));
         return Response.json({ ok: true, out: { rolled_back: true } });
+      case "cluster-start": {
+        NODE_NAMES.forEach(stopNode);
+        const r = ops("cluster-init", CLUSTER);
+        NODE_NAMES.forEach(startNode);
+        return Response.json(r);
+      }
+      case "cluster-status": {
+        const r = ops("cluster-status", CLUSTER);
+        return Response.json({ ...r, running: Object.fromEntries(NODE_NAMES.map((n) => [n, nodes.has(n)])) });
+      }
+      case "cluster-revoke":
+        return Response.json(ops("cluster-revoke", CLUSTER));
+      case "cluster-enrol":
+        return Response.json(ops("cluster-enrol", CLUSTER));
+      case "cluster-stop":
+      case "cluster-restart": {
+        const name = str("node");
+        if (!NODE_NAMES.includes(name)) throw new Error("invalid node");
+        if (body.action === "cluster-stop") stopNode(name);
+        else startNode(name);
+        return Response.json({ ok: true, out: { node: name, running: nodes.has(name) } });
+      }
       case "attacks":
         return Response.json(ops("attacks"));
       case "attack":
