@@ -74,13 +74,22 @@ export class ClusterNode {
     this.anchor = anchorDer;
     this.source = source;
     ensurePrivateDir(dir);
-    const cached = readTextIfExists(join(dir, "policy.signed.json"));
-    if (cached) {
-      try {
-        this.policy = verifyPolicy(this.anchor, JSON.parse(cached) as SignedPolicy);
-      } catch {
-        this.policy = null; // corrupted local copy: refuse everything until a valid sync
-      }
+    this.reloadLocal();
+  }
+
+  /**
+   * Re-read this node's own stored policy (e.g. one adopted by the node's
+   * process). The stored copy is re-verified; a corrupted copy means the node
+   * refuses everything until the next valid sync.
+   */
+  reloadLocal(): void {
+    const cached = readTextIfExists(join(this.dir, "policy.signed.json"));
+    if (!cached) return;
+    try {
+      const p = verifyPolicy(this.anchor, JSON.parse(cached) as SignedPolicy);
+      if (p.epoch >= this.epoch) this.policy = p;
+    } catch {
+      this.policy = null;
     }
   }
 
@@ -100,9 +109,11 @@ export class ClusterNode {
     }
     if (incoming.epoch < this.epoch) return { status: "rejected", epoch: this.epoch, reason: "rollback" };
     if (incoming.epoch === this.epoch) return { status: "unchanged", epoch: this.epoch };
+    // Persist first, adopt in memory last: if either write fails, the next sync
+    // retries the whole adoption instead of treating the epoch as already done.
     atomicWriteFile(join(this.dir, "policy.signed.json"), text);
-    this.policy = incoming;
     atomicWriteFile(join(this.dir, "ack.json"), JSON.stringify({ node: this.name, epoch: incoming.epoch, adopted_at: now }));
+    this.policy = incoming;
     return { status: "adopted", epoch: incoming.epoch };
   }
 

@@ -23,9 +23,14 @@ const timer = setInterval(() => {
     clearInterval(timer);
     return;
   }
-  const r = node.sync(Date.now());
-  if (r.status === "rejected" && r.reason !== "unreadable") {
-    process.stderr.write(`[${name}] refused policy update: ${r.reason}\n`);
+  try {
+    const r = node.sync(Date.now());
+    if (r.status === "rejected" && r.reason !== "unreadable") {
+      process.stderr.write(`[${name}] refused policy update: ${r.reason}\n`);
+    }
+  } catch (err) {
+    // A transient I/O failure must not take the node down: keep enforcing the
+    // last verified policy and retry on the next tick.
+    process.stderr.write(`[${name}] sync failed (${(err as NodeJS.ErrnoException).code ?? "error"}); retrying\n`);
   }
 }, pollMs);
-node.sync(Date.now());
