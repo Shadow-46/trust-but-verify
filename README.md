@@ -18,7 +18,7 @@ Node built-ins, so there is no `npm install` for the core.
 ```sh
 git clone https://github.com/Shadow-46/trust-but-verify.git
 cd trust-but-verify
-npm test                     # 93 tests (one is Linux-only and skipped on Windows)
+npm test                     # 94 tests (one is Linux-only and skipped on Windows)
 ```
 
 Run one request (the judging worker does exactly this, one process per request):

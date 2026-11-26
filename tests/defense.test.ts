@@ -71,6 +71,8 @@ test("every alert names the identity, the service and the triggering event(s)", 
   }
   const probing = alerts.find((a) => a.rule === "probing")!;
   assert.equal(probing.identity, "omar");
+  const decisionSeq = readAudit(paths).find((r) => r.type === "access_decision" && r.request_id === "p2")!.seq;
+  assert.ok(probing.events.endsWith(`(audit seq ${decisionSeq})`), "points at the triggering decision");
   assert.match(probing.events, /^p0,p1,p2 \(audit seq \d+\)$/);
   const revoked = alerts.find((a) => a.rule === "revoked_identity_used")!;
   assert.equal(revoked.identity, "maya");
@@ -91,4 +93,14 @@ test("every alert names the identity, the service and the triggering event(s)", 
   assert.equal(verifyBytes(pub, Buffer.from(body, "utf8"), Buffer.from(side.sig, "base64")), true);
   const forged = JSON.stringify(["tbv/alert/v2", side.ts, side.rule, "maya", side.service, side.event, side.detail]);
   assert.equal(verifyBytes(pub, Buffer.from(forged, "utf8"), Buffer.from(side.sig, "base64")), false);
+});
+
+test("alerts raised by one decision all point at that decision's audit seq", () => {
+  const dir = freshStateDir();
+  const env = { TRACK4_AUTO_QUARANTINE: "1" };
+  callEnv(dir, SETUP, env);
+  probe(dir, env);
+  const alerts = securityAlerts(statePaths(dir)).filter((a) => a.rule === "probing" || a.rule === "quarantined");
+  assert.equal(alerts.length, 2);
+  assert.equal(alerts[0].events, alerts[1].events, "probing and quarantine share the triggering decision");
 });

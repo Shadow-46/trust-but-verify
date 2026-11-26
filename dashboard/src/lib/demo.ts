@@ -57,7 +57,7 @@ export function describe(r: Row): { text: string; tone: "good" | "bad" | "warn" 
     case "security_alert": {
       const [rule, ...rest] = (r.reason ?? "").split(": ");
       // "identity=… service=… events=… [seq=n] — detail" (older records: just the detail)
-      const m = /^identity=(.*) service=(.*?) events=(.*?)(?: seq=(d+))? — ([sS]*)$/.exec(rest.join(": "));
+      const m = /^identity=(.*) service=(.*?) events=(.*?)(?: seq=(\d+))? — ([\s\S]*)$/.exec(rest.join(": "));
       return m
         ? { text: `${ruleLabel(rule)}: ${m[5]} (identity ${m[1]}, ${m[2]}, event ${m[3]}${m[4] ? `, audit #${m[4]}` : ""})`, tone: "bad" }
         : { text: `${ruleLabel(rule)}${r.actor ? ` (${r.actor})` : ""}: ${rest.join(": ")}`, tone: "bad" };
