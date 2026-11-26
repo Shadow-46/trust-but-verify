@@ -1,7 +1,7 @@
 // Strict loaders for events, approvals and policy. Every ID stays an opaque
 // string; anything keyed by an ID uses Map/Set.
 
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { parseCsvRecords } from "./csv.ts";
 import type { Approval, LogEvent, Policy } from "./types.ts";
 
@@ -178,7 +178,12 @@ export function parsePolicy(json: unknown): Policy {
   };
 }
 
-export const DEFAULT_POLICY_PATH = new URL("./policy.json", import.meta.url);
+// tools/build.mjs copies only .ts -> dist/*.js, so the built module falls back
+// to the source policy file at core/detector/policy.json.
+const besideModule = new URL("./policy.json", import.meta.url);
+export const DEFAULT_POLICY_PATH = existsSync(besideModule)
+  ? besideModule
+  : new URL("../../../core/detector/policy.json", import.meta.url);
 
 export function loadPolicy(path: string | URL = DEFAULT_POLICY_PATH): Policy {
   return parsePolicy(JSON.parse(readFileSync(path, "utf8")));
