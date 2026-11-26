@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { signBytes, verifyBytes } from "../crypto/sign.ts";
 import { appendDurable, atomicWriteFile, readTextIfExists } from "../store/fsx.ts";
+import { publishHead } from "./witness.ts";
 import type { StatePaths } from "../store/paths.ts";
 
 /**
@@ -72,6 +73,7 @@ export function appendAudit(paths: StatePaths, fields: AuditFields, existing?: A
   appendDurable(paths.audit, JSON.stringify(record));
   // Signed head: lets a load detect a log whose tail was cut off after the last state save.
   atomicWriteFile(paths.auditHead, JSON.stringify({ seq: record.seq, hash: record.hash, sig: record.sig }));
+  publishHead({ seq: record.seq, hash: record.hash, sig: record.sig });
   return record;
 }
 

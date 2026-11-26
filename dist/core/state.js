@@ -3,6 +3,7 @@ import { createHmac, timingSafeEqual } from "node:crypto";
                                                
                                                          
 import { checkAuditHead, readAudit } from "./audit/log.js";
+import { matchesWitness } from "./audit/witness.js";
 import { atomicWriteFile, readTextIfExists } from "./store/fsx.js";
                                                    
 import { IntegrityError, RequestError } from "./errors.js";
@@ -89,6 +90,7 @@ export function loadState(paths            , macKey        )        {
     throw new IntegrityError("audit log truncated or replaced");
   }
   if (!checkAuditHead(paths, records)) throw new IntegrityError("audit log truncated or replaced");
+  if (!matchesWitness(records)) throw new IntegrityError("rollback detected by the external witness");
   return {
     setupId: b.setup_id,
     salt: Buffer.from(b.salt, "base64"),

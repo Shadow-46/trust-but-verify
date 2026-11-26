@@ -2,6 +2,7 @@ import { createHmac, timingSafeEqual } from "node:crypto";
 import type { Sealed } from "./crypto/aead.ts";
 import type { WrappedDataKey } from "./keys/keystore.ts";
 import { checkAuditHead, readAudit } from "./audit/log.ts";
+import { matchesWitness } from "./audit/witness.ts";
 import { atomicWriteFile, readTextIfExists } from "./store/fsx.ts";
 import type { StatePaths } from "./store/paths.ts";
 import { IntegrityError, RequestError } from "./errors.ts";
@@ -88,6 +89,7 @@ export function loadState(paths: StatePaths, macKey: Buffer): State {
     throw new IntegrityError("audit log truncated or replaced");
   }
   if (!checkAuditHead(paths, records)) throw new IntegrityError("audit log truncated or replaced");
+  if (!matchesWitness(records)) throw new IntegrityError("rollback detected by the external witness");
   return {
     setupId: b.setup_id,
     salt: Buffer.from(b.salt, "base64"),

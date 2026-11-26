@@ -1,0 +1,37 @@
+import { join } from "node:path";
+import { atomicWriteFile, readTextIfExists } from "../store/fsx.ts";
+
+/**
+ * External witness for the audit log. After every append, the signed log head
+ * (sequence number, hash, ML-DSA signature) is also published to a location the
+ * service host does not control (TRACK4_WITNESS_DIR; in production a separate
+ * auditor service or append-only store). On every load, a local log that no
+ * longer contains the witnessed head — for example state AND log rolled back
+ * together to an older, internally consistent copy — is rejected.
+ *
+ * Disabled when TRACK4_WITNESS_DIR is unset.
+ */
+
+type Head = { seq: number; hash: string; sig: string; at: number };
+
+const dir = () => process.env.TRACK4_WITNESS_DIR || undefined;
+
+export function publishHead(head: Omit<Head, "at">): void {
+  const d = dir();
+  if (!d) return;
+  atomicWriteFile(join(d, "head.json"), JSON.stringify({ ...head, at: Date.now() }));
+}
+
+/** False when the local log is behind or diverges from what the witness last saw. */
+export function matchesWitness(records: { seq: number; hash: string }[]): boolean {
+  const d = dir();
+  if (!d) return true;
+  const text = readTextIfExists(join(d, "head.json"));
+  if (!text) return true;
+  try {
+    const head = JSON.parse(text) as Head;
+    return records[head.seq - 1]?.hash === head.hash;
+  } catch {
+    return false;
+  }
+}
