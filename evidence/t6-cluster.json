@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-26T09:22:25.650Z",
+  "generated_at": "2026-11-26T09:26:41.731Z",
   "environment": {
     "node": "v24.11.1",
     "openssl": "3.5.4",
@@ -112,25 +112,25 @@
   "revocation_propagation_ms": {
     "definition": "control-plane publish time to the latest node adoption time (each node verifies the ML-DSA signature and epoch)",
     "samples": [
+      16,
+      19,
+      21,
+      20,
+      18,
+      19,
+      20,
       17,
-      18,
-      18,
+      17,
       19,
       18,
-      18,
-      18,
-      18,
-      19,
+      20,
       18,
       19,
-      19,
-      19,
-      18,
-      17
+      20
     ],
-    "median": 18,
-    "p95": 19,
-    "max": 19
+    "median": 19,
+    "p95": 21,
+    "max": 21
   },
   "all_passed": true
 }
