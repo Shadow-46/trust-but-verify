@@ -7,7 +7,7 @@ import { runAttack } from "../core/demo/attacks.ts";
 
 test("every Attack Lab attack is blocked", () => {
   const results = runAttack("all");
-  assert.equal(results.length, 12);
+  assert.equal(results.length, 15);
   for (const r of results) assert.ok(r.blocked, `${r.id}: ${r.evidence}`);
 });
 

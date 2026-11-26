@@ -1,5 +1,5 @@
 import { randomBytes } from "node:crypto";
-import { copyFileSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { copyFileSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { handle } from "../adapter.ts";
@@ -90,6 +90,18 @@ const ATTACKS: Attack[] = [
   {
     id: "edit-log", name: "Edit a record in the audit log", attack: "Change a past 'deny' into 'allow' to hide an incident.", defense: "Hash chain + ML-DSA signature on every record.",
     run: () => { const { paths, call } = instance(); call({ op: "read", actor: "omar", asset: "design-doc", request_id: "d" }); const lines = readFileSync(paths.audit, "utf8").trimEnd().split("\n"); lines[1] = lines[1].replace('"decision":"deny"', '"decision":"allow"'); writeFileSync(paths.audit, lines.join("\n") + "\n"); const v = verifyAudit(paths); return { blocked: !v.ok, evidence: `verify-log: ${v.ok ? "valid" : `broken at record #${v.first_bad_seq}`}` }; },
+  },
+  {
+    id: "truncate-log", name: "Cut the log and delete its signed head", attack: "Remove the newest records (a denial) and the head file that would expose it.", defense: "Head is mandatory after setup; failure alerts never re-sign the log.",
+    run: () => { const { paths, call } = instance(); call({ op: "read", actor: "omar", asset: "design-doc", request_id: "t" }); const lines = readFileSync(paths.audit, "utf8").trimEnd().split("\n"); writeFileSync(paths.audit, lines.slice(0, -1).join("\n") + "\n"); rmSync(paths.auditHead); const r = call({ op: "read", actor: "maya", asset: "design-doc", request_id: "t2" }); return { blocked: r.error === "integrity_failure", evidence: `read: ${JSON.stringify(r)}` }; },
+  },
+  {
+    id: "swap-audit-key", name: "Swap the log's verification key", attack: "Replace keys/audit.pub with the attacker's own key to re-sign an edited log.", defense: "Hash of the verification key is pinned inside the MAC'd state.",
+    run: () => { const { paths, call } = instance(); writeFileSync(paths.auditPub, generateSigningKeyPair().publicKey.toString("base64")); const r = call({ op: "read", actor: "maya", asset: "design-doc", request_id: "k" }); return { blocked: r.error === "integrity_failure", evidence: `read: ${JSON.stringify(r)}` }; },
+  },
+  {
+    id: "delete-signing-key", name: "Delete the log signing key", attack: "Remove keys/audit.key so new records are written unsigned.", defense: "No key means fail closed; a record is never written without a signature.",
+    run: () => { const { paths, call } = instance(); const before = readFileSync(paths.audit, "utf8"); rmSync(paths.auditKey); const r = call({ op: "read", actor: "maya", asset: "design-doc", request_id: "s" }); return { blocked: r.error === "integrity_failure" && readFileSync(paths.audit, "utf8") === before, evidence: `read: ${JSON.stringify(r)}; no record written` }; },
   },
   {
     id: "log-injection", name: "Inject a fake log record", attack: "Send an actor name containing a newline and a forged JSON record.", defense: "Every value is a JSON field; record boundaries cannot be forged.",
