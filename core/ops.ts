@@ -69,7 +69,7 @@ export function runOps(argv: string[]): { code: number; out: unknown } {
         out: {
           events: data.events,
           incidents: data.incidents.map((i) => ({ id: i.id, kind: i.kind, events: i.event_ids })),
-          alerts: report.alerts.map((a) => ({ id: a.alert_id, rule: a.rule, severity: a.severity, actor: a.actor, summary: a.summary, events: a.event_ids, services: a.services, limits: a.limits, detected_at: a.detected_at_received_utc })),
+          alerts: report.alerts.map((a) => ({ id: a.alert_id, rule: a.rule, attack: a.attack, severity: a.severity, actor: a.actor, summary: a.summary, events: a.event_ids, services: a.services, limits: a.limits, detected_at: a.detected_at_received_utc })),
         },
       };
     }

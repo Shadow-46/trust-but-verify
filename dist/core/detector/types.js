@@ -114,9 +114,23 @@
                              
                               
 
+/** A MITRE ATT&CK reference (Enterprise matrix): exact ID and name. */
+                            
+             
+               
+ 
+
+/** ATT&CK tactics and techniques an alert is consistent with (context for analysts, not proof). */
+                                
+                       
+                          
+ 
+
                         
                    
                   
+                                           
+                        
                                       
                 
                         

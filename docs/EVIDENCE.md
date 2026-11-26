@@ -21,6 +21,8 @@ Reproduce: `npm test`, `bash tools/judge-parity.sh <Track-4-Toolkit>`, `python t
 | 11 | Delivery under loss/reordering | Complete authenticated messages delivered in any order; incomplete or invalid discarded and reported | **measured** — `tests/messaging.test.ts` (out-of-order, tampered chunk, 30 s expiry → reported failures) |
 | 12 | Session resumption | **Supported.** Bound to the authenticated peer; different/re-keyed identity, replayed request or revoked identity refused | **measured** — `tests/messaging.test.ts` resumption test |
 
+Detector alerts (goals 6–8) carry MITRE ATT&CK IDs: T1098 Account Manipulation + T1078 Valid Accounts for unapproved role changes, TA0008 Lateral Movement / T1021 Remote Services for unexpected service-edge sequences, T1078 for borrowed or out-of-scope approvals (`core/detector/detect.ts` `ATTACK_MAP`, `tests/detector.test.ts`); re-running `npm run demo:detector` gives identical metrics.
+
 ## Performance
 `read` ≈ 37 ms per request including Node process start (bare Node ≈ 12 ms), native Linux filesystem.
 Revocation propagation: see goal 2.

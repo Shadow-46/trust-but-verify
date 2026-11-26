@@ -113,9 +113,23 @@ export type AlertRule =
   | "access_outside_approval"
   | "unapproved_admin_action";
 
+/** A MITRE ATT&CK reference (Enterprise matrix): exact ID and name. */
+export interface AttackRef {
+  id: string;
+  name: string;
+}
+
+/** ATT&CK tactics and techniques an alert is consistent with (context for analysts, not proof). */
+export interface AttackMapping {
+  tactics: AttackRef[];
+  techniques: AttackRef[];
+}
+
 export interface Alert {
   alert_id: string;
   rule: AlertRule;
+  /** MITRE ATT&CK mapping for this rule */
+  attack: AttackMapping;
   severity: "high" | "medium" | "low";
   actor: string;
   session_ids: string[];

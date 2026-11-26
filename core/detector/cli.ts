@@ -13,6 +13,7 @@ export function formatText(report: DetectionReport): string {
   lines.push(`ALERTS (${report.alerts.length})`);
   for (const a of report.alerts) {
     lines.push(`  ${a.alert_id} [${a.severity}] ${a.rule} — ${a.actor}`);
+    lines.push(`    MITRE ATT&CK: ${[...a.attack.tactics, ...a.attack.techniques].map((t) => `${t.id} ${t.name}`).join(", ")}`);
     lines.push(`    ${a.summary}`);
     lines.push(`    events: ${a.event_ids.join(", ")} | services: ${a.services.join(" -> ")}`);
     lines.push(`    limits: ${a.limits}`);

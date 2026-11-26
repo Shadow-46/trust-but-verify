@@ -10,6 +10,7 @@ import { edgeKey, parseUtc } from "./ingest.js";
              
         
             
+                
            
                  
                   
@@ -27,6 +28,26 @@ const ADMIN_ACTIONS = new Map                ([
   ["approve_role_change", "grant_role"],
   ["grant_role", "grant_role"],
   ["revoke_role", "revoke_role"],
+]);
+
+// MITRE ATT&CK (Enterprise) mapping per rule: exact IDs and names. Context for analysts and
+// SOC tooling; it does not change what is detected.
+const T1078 = { id: "T1078", name: "Valid Accounts" };
+const T1098 = { id: "T1098", name: "Account Manipulation" };
+const T1021 = { id: "T1021", name: "Remote Services" };
+const TA0004 = { id: "TA0004", name: "Privilege Escalation" };
+const TA0008 = { id: "TA0008", name: "Lateral Movement" };
+export const ATTACK_MAP                                        = new Map                          ([
+  // unapproved privilege / role change made with a valid account
+  ["unexpected_role_change", { tactics: [TA0004], techniques: [T1098, T1078] }],
+  // role or admin change without matching change control
+  ["unapproved_admin_action", { tactics: [TA0004], techniques: [T1098] }],
+  // unexpected service-edge sequence by one identity
+  ["lateral_movement_candidate", { tactics: [TA0008], techniques: [T1021] }],
+  // borrowed, expired or out-of-scope approval used to access a service
+  ["access_outside_approval", { tactics: [], techniques: [T1078] }],
+  // a valid account reaching a service outside its baseline
+  ["unexpected_access", { tactics: [], techniques: [T1078] }],
 ]);
 
                 
@@ -107,6 +128,7 @@ export function detect(
     const alert        = {
       alert_id: `alert-${String(alerts.length + 1).padStart(3, "0")}`,
       rule,
+      attack: ATTACK_MAP.get(rule) ?? { tactics: [], techniques: [] },
       severity,
       actor: trigger.e.actor,
       session_ids: [...new Set(sorted.map((w) => w.e.session_id).filter((s) => s !== ""))],

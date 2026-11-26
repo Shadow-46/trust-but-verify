@@ -703,6 +703,14 @@ export default function Console() {
                         </div>
                         <p className="mt-1 max-w-[80ch] text-[#3A404A]">{a.summary}</p>
                         <p className="mt-1 font-mono text-xs text-[#5C6370]">{a.services.join(" > ")}, events {a.events.join(", ")}</p>
+                        {a.attack && (
+                          <p className="mt-1 flex flex-wrap gap-1.5 text-xs">
+                            <span className="text-[#5C6370]">MITRE ATT&amp;CK</span>
+                            {[...a.attack.tactics, ...a.attack.techniques].map((t: any) => (
+                              <span key={t.id} className="rounded border border-[#E3E5E8] bg-[#F7F8FA] px-1.5 font-mono text-[#3A404A]" title={t.name}>{t.id} {t.name}</span>
+                            ))}
+                          </p>
+                        )}
                       </li>
                     ))}
                     <li className="bg-[#FBFBFC] px-4 py-2.5 text-xs text-[#5C6370]">

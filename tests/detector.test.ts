@@ -49,6 +49,15 @@ describe("practice data (toolkit evt-001..022)", { skip: havePractice ? false : 
     assert.equal(lateral.detected_at_received_utc, "2026-01-15T09:04:02.100Z");
   });
 
+  test("alerts carry exact MITRE ATT&CK IDs and names", () => {
+    const { report } = load();
+    const [role, lateral] = report.alerts;
+    assert.deepEqual(role.attack.techniques, [{ id: "T1098", name: "Account Manipulation" }, { id: "T1078", name: "Valid Accounts" }]);
+    assert.deepEqual(role.attack.tactics, [{ id: "TA0004", name: "Privilege Escalation" }]);
+    assert.deepEqual(lateral.attack.tactics, [{ id: "TA0008", name: "Lateral Movement" }]);
+    assert.deepEqual(lateral.attack.techniques, [{ id: "T1021", name: "Remote Services" }]);
+  });
+
   test("keeps receipt order and raw timestamps, orders the timeline by corrected time", () => {
     const { events, report } = load();
     assert.deepEqual(report.events.map((c) => c.event_id), events.map((e) => e.event_id));
@@ -240,4 +249,15 @@ describe("input handling", () => {
     assert.equal(r.alerts[0].actor, "__proto__");
     assert.equal(({} as Record<string, unknown>).polluted, undefined);
   });
+});
+
+test("every detector rule has an ATT&CK mapping with well-formed IDs", async () => {
+  const { ATTACK_MAP } = await import("../core/detector/detect.ts");
+  for (const rule of ["unexpected_role_change", "unapproved_admin_action", "lateral_movement_candidate", "access_outside_approval", "unexpected_access"] as const) {
+    const m = ATTACK_MAP.get(rule);
+    assert.ok(m && m.techniques.length > 0, rule);
+    for (const t of m.techniques) assert.match(t.id, /^T\d{4}$/);
+    for (const t of m.tactics) assert.match(t.id, /^TA\d{4}$/);
+  }
+  assert.deepEqual(ATTACK_MAP.get("access_outside_approval")!.techniques, [{ id: "T1078", name: "Valid Accounts" }]);
 });

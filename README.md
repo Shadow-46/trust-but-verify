@@ -144,6 +144,8 @@ npm run demo:cluster        # runs the scenario and rewrites evidence/t6-cluster
 ## Detector accuracy (goals 6–8)
 `npm run demo:detector` scores the rule-based detector on seeded synthetic logs (practice CSV format; ground truth never given to the detector). Results in `evidence/t5-detector.json` and `docs/EVIDENCE.md`: per-incident F1 1 (standard) and 1 (hard: borrowed approvals, successful lateral hops, late-delivered approvals), median time-to-alert 1560.25 / 1092.25 ms, 0 false alerts per 1,000 benign events. These are upper bounds: the generator models the same documented environment the rules encode.
 
+Every detector alert names the identity, services and events, and carries its **MITRE ATT&CK** mapping: unapproved role change → T1098 Account Manipulation + T1078 Valid Accounts (TA0004 Privilege Escalation); admin change without matching approval → T1098; unexpected service-edge sequence → TA0008 Lateral Movement / T1021 Remote Services; borrowed, expired or out-of-scope approval, and access outside a role's baseline → T1078 Valid Accounts. The mapping is context for analysts; it does not change detection (metrics identical).
+
 ## Operator console (demo)
 ```sh
 cd dashboard && npm install && npm run dev     # http://localhost:3000
