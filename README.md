@@ -9,6 +9,8 @@ Built for Yugaantar DevForge 2026, Track 4.
 > Work in progress: the protected-resource service, key rotation and multi-node revocation are
 > complete; crash recovery, backups, signed logs, messaging and the detector are complete; detector metrics and the operator dashboard are being added.
 
+**Docs:** [Evidence for all 12 goals](docs/EVIDENCE.md) · [Threat model](docs/THREAT_MODEL.md)
+
 ## Clean-machine setup
 Requirements: **Node.js 24.11.1 or newer**. Nothing else — the service uses only
 Node built-ins, so there is no `npm install` for the core.
