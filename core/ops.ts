@@ -1,6 +1,10 @@
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { verifyAudit } from "./audit/log.ts";
+import { readAudit, verifyAudit } from "./audit/log.ts";
+import { detect } from "./detector/detect.ts";
+import { loadPolicy, parseApprovals, parseEventsCsv } from "./detector/ingest.ts";
+import { generate } from "./detector/synth.ts";
+import { openContext } from "./vault.ts";
 import { createBackup, restoreBackup } from "./backup.ts";
 import { rotateStoredDataKey } from "./keys/rotation.ts";
 import { statePaths } from "./store/paths.ts";
@@ -28,6 +32,40 @@ export function runOps(argv: string[]): { code: number; out: unknown } {
       if (!arg) break;
       const r = restoreBackup(paths, resolve(arg));
       return { code: r.ok ? 0 : 1, out: r };
+    }
+    case "audit-log":
+      // Metadata only (no bodies, no keys): what the operator sees.
+      return {
+        code: 0,
+        out: readAudit(paths)
+          .slice(-60)
+          .map(({ seq, ts, type, request_id, actor, asset, decision, reason, hash }) => ({ seq, ts, type, request_id, actor, asset, decision, reason, hash: hash.slice(0, 12) })),
+      };
+    case "state-summary": {
+      const { state } = openContext(paths);
+      return {
+        code: 0,
+        out: {
+          version: state.version,
+          active_key: state.activeKeyVersion,
+          keys: state.keys.map((k) => ({ version: k.version, status: k.status, created_at: k.created_at })),
+          owners: [...state.owners].map(([asset, owner]) => ({ asset, owner })),
+          revoked: [...state.revoked],
+          disabled: [...state.disabled],
+        },
+      };
+    }
+    case "detect-sample": {
+      const data = generate({ seed: Number(arg ?? 1), users: 8, incidents: 4, hard: true });
+      const report = detect(parseEventsCsv(data.csv), parseApprovals(data.approvals), loadPolicy());
+      return {
+        code: 0,
+        out: {
+          events: data.events,
+          incidents: data.incidents.map((i) => ({ id: i.id, kind: i.kind, events: i.event_ids })),
+          alerts: report.alerts.map((a) => ({ id: a.alert_id, rule: a.rule, severity: a.severity, actor: a.actor, summary: a.summary, events: a.event_ids, services: a.services, limits: a.limits, detected_at: a.detected_at_received_utc })),
+        },
+      };
     }
     case "rotate":
       return { code: 0, out: rotateStoredDataKey(paths) };
