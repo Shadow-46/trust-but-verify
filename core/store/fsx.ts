@@ -1,0 +1,128 @@
+import {
+  closeSync,
+  existsSync,
+  fsyncSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  renameSync,
+  statSync,
+  unlinkSync,
+  writeSync,
+} from "node:fs";
+import { randomBytes } from "node:crypto";
+import { dirname, join } from "node:path";
+
+const FILE_MODE = 0o600;
+const DIR_MODE = 0o700;
+
+export function ensureDir(dir: string): void {
+  mkdirSync(dir, { recursive: true, mode: DIR_MODE });
+}
+
+/** Best-effort directory fsync so a rename survives power loss (no-op where unsupported). */
+function fsyncDir(dir: string): void {
+  let fd: number | undefined;
+  try {
+    fd = openSync(dir, "r");
+    fsyncSync(fd);
+  } catch {
+    // Windows and some filesystems do not allow fsync on directories.
+  } finally {
+    if (fd !== undefined) closeSync(fd);
+  }
+}
+
+/**
+ * Replace `path` atomically: write a private temp file in the same directory,
+ * fsync it, then rename over the target. Readers see the old or the new file,
+ * never a partial one.
+ */
+export function atomicWriteFile(path: string, data: string | Buffer): void {
+  const dir = dirname(path);
+  ensureDir(dir);
+  const tmp = join(dir, `.tmp-${process.pid}-${randomBytes(6).toString("hex")}`);
+  const fd = openSync(tmp, "wx", FILE_MODE);
+  try {
+    writeSync(fd, typeof data === "string" ? Buffer.from(data, "utf8") : data);
+    fsyncSync(fd);
+  } finally {
+    closeSync(fd);
+  }
+  try {
+    renameSync(tmp, path);
+  } catch (err) {
+    try {
+      unlinkSync(tmp);
+    } catch {
+      // ignore cleanup failure; the original error matters
+    }
+    throw err;
+  }
+  fsyncDir(dir);
+}
+
+/** Append one line and fsync before returning (used for the audit log). */
+export function appendDurable(path: string, line: string): void {
+  ensureDir(dirname(path));
+  const fd = openSync(path, "a", FILE_MODE);
+  try {
+    writeSync(fd, Buffer.from(line.endsWith("\n") ? line : `${line}\n`, "utf8"));
+    fsyncSync(fd);
+  } finally {
+    closeSync(fd);
+  }
+}
+
+export function readTextIfExists(path: string): string | undefined {
+  if (!existsSync(path)) return undefined;
+  return readFileSync(path, "utf8");
+}
+
+const sleepCell = new Int32Array(new SharedArrayBuffer(4));
+function sleepMs(ms: number): void {
+  Atomics.wait(sleepCell, 0, 0, ms);
+}
+
+const LOCK_WAIT_MS = 10_000;
+const LOCK_STALE_MS = 30_000;
+
+/**
+ * Cross-process mutual exclusion. The judge starts one process per request, so
+ * concurrent requests must not interleave read-modify-write cycles on state.
+ * A lock older than LOCK_STALE_MS is assumed abandoned by a crashed process.
+ */
+export function withLock<T>(dir: string, fn: () => T): T {
+  ensureDir(dir);
+  const lockPath = join(dir, ".lock");
+  const deadline = Date.now() + LOCK_WAIT_MS;
+  let fd: number | undefined;
+  while (fd === undefined) {
+    try {
+      fd = openSync(lockPath, "wx", FILE_MODE);
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== "EEXIST") throw err;
+      try {
+        if (Date.now() - statSync(lockPath).mtimeMs > LOCK_STALE_MS) {
+          unlinkSync(lockPath);
+          continue;
+        }
+      } catch {
+        // lock vanished between checks; retry immediately
+        continue;
+      }
+      if (Date.now() > deadline) throw new Error("state lock timeout");
+      sleepMs(5);
+    }
+  }
+  try {
+    return fn();
+  } finally {
+    closeSync(fd);
+    try {
+      unlinkSync(lockPath);
+    } catch {
+      // already removed
+    }
+  }
+}

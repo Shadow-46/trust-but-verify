@@ -1,0 +1,24 @@
+/**
+ * Errors whose `code` is safe to show to a caller. The code is a fixed
+ * identifier chosen by us, never derived from request data, so it cannot
+ * leak identifiers, bodies or key material.
+ */
+export class RequestError extends Error {
+  readonly code: string;
+
+  constructor(code: string) {
+    super(code);
+    this.name = "RequestError";
+    this.code = code;
+  }
+}
+
+/** Raised when stored data fails an integrity check (tampering or corruption). */
+export class IntegrityError extends Error {
+  readonly code = "integrity_failure";
+
+  constructor(what: string) {
+    super(`integrity check failed: ${what}`);
+    this.name = "IntegrityError";
+  }
+}
