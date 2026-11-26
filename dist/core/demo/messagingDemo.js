@@ -56,7 +56,7 @@ export function messagingDemo(text = "Can you review the Q3 design doc?") {
   add("Decrypt recorded traffic later with stolen identity keys", stolen.receive(first[0]));
 
   return {
-    handshake: { session: aliceS.id.slice(0, 12) + "…", algorithms: "X25519 + ML-KEM-768 → HKDF-SHA-256, transcript signed with ML-DSA-65, AES-256-GCM", resumption_for_alice: resumedOk ? "allowed" : "failed", keys_erased: aliceS.secretsErased() && bobS.secretsErased() },
+    handshake: { session: aliceS.id.slice(0, 12) + "…", algorithms: "X25519 + ML-KEM-768 → HKDF-SHA-256, transcript signed with ML-DSA-65, AES-256-GCM under a per-message HMAC-SHA-256 ratchet", resumption_for_alice: resumedOk ? "allowed" : "failed", keys_erased: aliceS.secretsErased() && bobS.secretsErased() },
     messages,
     attacks,
   };

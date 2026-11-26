@@ -38,6 +38,7 @@ readable only by the service user (0600/0700) or the master key comes from a KMS
 |---|---|---|
 | Lost device keeps access | Device/identity revocation in signed policy; every request re-checked | validator; goal 2 (≤21 ms to all nodes) |
 | Harvest now, decrypt later | ML-KEM-768 hybrid with X25519; AES-256 at rest | goals 9–10, `protected_read` interop |
+| Stolen keys expose past messages, even within a session | Ephemeral hybrid handshake per session; per-message HMAC-SHA-256 ratchet, message and old chain keys zeroed after use (no DH ratchet: later messages of a compromised session are exposed) | messaging tests (stolen identity keys; stolen live chain state cannot open messages 1..5) |
 | Forged / replayed old policy | ML-DSA signature + monotonic epoch; control-plane high-water mark | cluster + recovery tests |
 | Undo a revocation on disk | HMAC'd state, version counter bound to signed log head | rollback test → `integrity_failure` |
 | Log tampering / fake records | Hash chain + ML-DSA signatures; JSON-field encoding of user text | injection, edit, truncation tests |

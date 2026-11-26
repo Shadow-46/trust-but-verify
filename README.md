@@ -18,7 +18,7 @@ Node built-ins, so there is no `npm install` for the core.
 ```sh
 git clone https://github.com/Shadow-46/trust-but-verify.git
 cd trust-but-verify
-npm test                     # 86 tests (one is Linux-only and skipped on Windows)
+npm test                     # 93 tests (one is Linux-only and skipped on Windows)
 ```
 
 Run one request (the judging worker does exactly this, one process per request):
@@ -134,6 +134,12 @@ npm run demo:cluster        # runs the scenario and rewrites evidence/t6-cluster
 - **Forward secrecy:** identity keys only sign; ephemeral private keys live only inside the handshake
   and session keys are zeroed on `close()`. Tested: with both stolen identity keys and the recorded
   transcript, an attacker can only create a new session with unrelated keys and cannot decrypt.
+- **Per-message ratchet (forward secrecy within a session):** each direction has a chain key CK;
+  every message uses MK = HMAC-SHA-256(CK, 0x01) and moves on to CK' = HMAC-SHA-256(CK, 0x02), and MK and
+  the old CK are zeroed right after use. Stealing the live chain state therefore does not decrypt
+  earlier messages of the same session. Out-of-order delivery keeps at most 256 skipped message keys
+  (each used once, then erased; unused ones expire after 5 min), and a far-ahead or forged sequence
+  number is rejected without burning keys. Resumption starts fresh chains. Tests: `tests/messaging.test.ts`.
 - **Loss / reordering:** chunks may arrive in any order; a message is delivered only when all chunks
   authenticate. A tampered chunk discards the whole message, and messages still incomplete after 30 s
   are discarded; both are reported as delivery failures.
@@ -209,6 +215,8 @@ compared with stripping types at runtime.
   and multi-host deployment are the next step. A node directory writable by an attacker can still
   lose its replay file (replays then stay bounded by the ±30 s timestamp window).
 - Messaging forward secrecy and resumption rely on Node.js erasing secrets in memory.
+- The messaging ratchet is symmetric only: there is no Diffie-Hellman ratchet, so a stolen chain state
+  reveals the *later* messages of that session (no post-compromise security) until it is closed or resumed.
 - The judged adapter identifies actors by ID only; per-device signatures exist in the cluster layer.
 - Denial of service and side channels are out of scope.
 

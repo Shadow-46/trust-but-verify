@@ -1,4 +1,4 @@
-import { createHash, createPublicKey, diffieHellman, generateKeyPairSync, randomBytes } from "node:crypto";
+import { createHash, createHmac, createPublicKey, diffieHellman, generateKeyPairSync, randomBytes } from "node:crypto";
 import { aad, open, seal } from "../crypto/aead.ts";
 import { hkdf } from "../crypto/kdf.ts";
 import { decapsulate, encapsulate, exportMlKem768PublicKeyRaw, importMlKem768PublicKey } from "../crypto/kem.ts";
@@ -16,6 +16,13 @@ import { IntegrityError } from "../errors.ts";
  * each party to its ephemeral keys. Ephemeral private keys exist only inside the
  * handshake functions and session keys are zeroed on close: later exposure of
  * an identity key does not reveal earlier sessions (forward secrecy).
+ *
+ * Per-message symmetric ratchet (forward secrecy WITHIN a session): each direction
+ * has a chain key CK. For every message, MK = HMAC-SHA-256(CK, 0x01) encrypts that
+ * message's chunks and CK' = HMAC-SHA-256(CK, 0x02) replaces CK; MK and the old CK
+ * are zeroed right after use. Stealing the current chain state therefore does not
+ * decrypt earlier messages. There is no DH ratchet: a stolen chain state does reveal
+ * later messages of that session (no post-compromise security), a stated limit.
  */
 
 export type Identity = { id: string; keys: SigningKeyPair };
@@ -131,13 +138,33 @@ export function respond(me: Identity, hello: Hello, dir: Directory): { reply: Re
 }
 
 type Pending = { total: number; seq: number; chunks: Map<number, Buffer>; first_at: number };
+/** A message key kept for out-of-order delivery. `used`: a chunk of that message already authenticated. */
+type HeldKey = { key: Buffer; at: number; used: boolean };
+
+/** Hard cap on message keys held for out-of-order delivery (skipped + partially received). */
+export const MAX_SKIPPED_KEYS = 256;
+/** Skipped message keys that never saw a chunk are erased after this long. */
+export const SKIPPED_KEY_TTL_MS = 5 * 60_000;
+
+const ONE = Buffer.from([0x01]);
+const TWO = Buffer.from([0x02]);
+
+/** One ratchet step: the message key for this position and the next chain key (old CK untouched). */
+function ratchet(ck: Buffer): { mk: Buffer; next: Buffer } {
+  return { mk: createHmac("sha256", ck).update(ONE).digest(), next: createHmac("sha256", ck).update(TWO).digest() };
+}
 
 export class Session {
   readonly id: string;
   readonly self: string;
   readonly peer: string;
-  private readonly sendKey: Buffer;
-  private readonly recvKey: Buffer;
+  /** Chain keys: advanced (and the previous one zeroed) for every message. */
+  private sendChain: Buffer;
+  private recvChain: Buffer;
+  /** The next sequence number whose key the receive chain would produce. */
+  private recvNext = 1;
+  /** Message keys held for out-of-order or partially received messages (capped, expiring). */
+  private readonly heldKeys = new Map<number, HeldKey>();
   /** Secret for resuming this session; held by both ends, zeroed on close. */
   readonly resumeSecret: Buffer;
   private sendSeq = 0;
@@ -146,39 +173,95 @@ export class Session {
   readonly failures: DeliveryFailure[] = [];
   closed = false;
 
+  /** `sendKey` / `recvKey` are the initial chain keys of the two directions. */
   constructor(id: string, self: string, peer: string, sendKey: Buffer, recvKey: Buffer, resumeSecret: Buffer) {
     this.id = id;
     this.self = self;
     this.peer = peer;
-    this.sendKey = Buffer.from(sendKey);
-    this.recvKey = Buffer.from(recvKey);
+    this.sendChain = Buffer.from(sendKey);
+    this.recvChain = Buffer.from(recvKey);
     this.resumeSecret = Buffer.from(resumeSecret);
   }
 
   private chunkAad(from: string, to: string, msgId: string, seq: number, index: number, total: number): Buffer {
-    return aad("tbv/msg/v1", this.id, from, to, msgId, seq, index, total);
+    return aad("tbv/msg/v2", this.id, from, to, msgId, seq, index, total);
   }
 
-  /** Encrypt `data` as one message split into authenticated chunks. */
+  /** Encrypt `data` as one message split into authenticated chunks, under a fresh message key. */
   send(data: Buffer, chunkSize = 1024): Envelope[] {
     if (this.closed) throw new Error("session closed");
     const msgId = randomBytes(12).toString("hex");
     const seq = ++this.sendSeq;
+    const { mk, next } = ratchet(this.sendChain);
+    this.sendChain.fill(0);
+    this.sendChain = next;
     const total = Math.max(1, Math.ceil(data.length / chunkSize));
     const out: Envelope[] = [];
-    for (let index = 0; index < total; index++) {
-      const part = data.subarray(index * chunkSize, (index + 1) * chunkSize);
-      const sealed = seal(this.sendKey, part, this.chunkAad(this.self, this.peer, msgId, seq, index, total));
-      out.push({ session_id: this.id, from: this.self, to: this.peer, msg_id: msgId, seq, index, total, ...sealed });
+    try {
+      for (let index = 0; index < total; index++) {
+        const part = data.subarray(index * chunkSize, (index + 1) * chunkSize);
+        const sealed = seal(mk, part, this.chunkAad(this.self, this.peer, msgId, seq, index, total));
+        out.push({ session_id: this.id, from: this.self, to: this.peer, msg_id: msgId, seq, index, total, ...sealed });
+      }
+    } finally {
+      mk.fill(0);
     }
     return out;
+  }
+
+  /**
+   * The message key for `seq`. A key not yet derived is computed TENTATIVELY (advancing a copy of
+   * the chain); the caller commits it only after the chunk authenticates, so forged envelopes
+   * with far-ahead sequence numbers cannot burn or exhaust message keys.
+   */
+  private messageKey(seq: number, now: number):
+    | { key: Buffer; commit: () => void; discard: () => void }
+    | { reject: string } {
+    if (!Number.isSafeInteger(seq) || seq < 1) return { reject: "invalid_sequence" };
+    const held = this.heldKeys.get(seq);
+    if (held) return { key: held.key, commit: () => { held.used = true; }, discard: () => {} };
+    if (seq < this.recvNext) return { reject: "duplicate_message" }; // key already used and erased
+    const skip = seq - this.recvNext;
+    if (skip >= MAX_SKIPPED_KEYS || this.heldKeys.size + skip >= MAX_SKIPPED_KEYS) return { reject: "too_far_ahead" };
+    let ck = Buffer.from(this.recvChain);
+    const skipped: [number, Buffer][] = [];
+    for (let s = this.recvNext; s < seq; s++) {
+      const r = ratchet(ck);
+      ck.fill(0);
+      ck = r.next;
+      skipped.push([s, r.mk]);
+    }
+    const { mk, next } = ratchet(ck);
+    ck.fill(0);
+    return {
+      key: mk,
+      commit: () => {
+        this.recvChain.fill(0);
+        this.recvChain = next;
+        for (const [s, k] of skipped) this.heldKeys.set(s, { key: k, at: now, used: false });
+        this.heldKeys.set(seq, { key: mk, at: now, used: true });
+        this.recvNext = seq + 1;
+      },
+      discard: () => {
+        mk.fill(0);
+        next.fill(0);
+        for (const [, k] of skipped) k.fill(0);
+      },
+    };
+  }
+
+  private eraseKey(seq: number): void {
+    const held = this.heldKeys.get(seq);
+    if (!held) return;
+    held.key.fill(0);
+    this.heldKeys.delete(seq);
   }
 
   /**
    * Accept one chunk. The AAD is rebuilt from THIS session's view (sender = peer,
    * recipient = self), so a chunk whose recipient, sender, position or message ID
    * was altered fails authentication. Messages are delivered only when every chunk
-   * has authenticated, each message ID at most once.
+   * has authenticated, each message ID at most once; the message key is then erased.
    */
   receive(env: Envelope, now = Date.now()): ReceiveResult {
     if (this.closed) return { status: "rejected", reason: "session_closed" };
@@ -189,13 +272,17 @@ export class Session {
     if (!Number.isInteger(total) || total < 1 || total > MAX_CHUNKS || !Number.isInteger(index) || index < 0 || index >= total) {
       return { status: "rejected", reason: "invalid_chunk_position" };
     }
+    const mk = this.messageKey(env.seq, now);
+    if ("reject" in mk) return { status: "rejected", reason: mk.reject };
     let plain: Buffer;
     try {
-      plain = open(this.recvKey, env, this.chunkAad(this.peer, this.self, env.msg_id, env.seq, index, total), "message chunk");
+      plain = open(mk.key, env, this.chunkAad(this.peer, this.self, env.msg_id, env.seq, index, total), "message chunk");
     } catch {
+      mk.discard();
       if (this.pending.delete(env.msg_id)) this.failures.push({ msg_id: env.msg_id, reason: "authentication_failed" });
       return { status: "rejected", reason: "authentication_failed" };
     }
+    mk.commit();
     let p = this.pending.get(env.msg_id);
     if (!p) {
       p = { total, seq: env.seq, chunks: new Map(), first_at: now };
@@ -208,12 +295,16 @@ export class Session {
     if (p.chunks.size < p.total) return { status: "buffered", msg_id: env.msg_id, have: p.chunks.size, total: p.total };
     this.pending.delete(env.msg_id);
     this.seen.add(env.msg_id);
+    this.eraseKey(env.seq); // used once: erase it, so this message can never be decrypted again here
     const done = p;
     const data = Buffer.concat(Array.from({ length: done.total }, (_, i) => done.chunks.get(i) as Buffer));
     return { status: "delivered", msg_id: env.msg_id, data };
   }
 
-  /** Discard messages still incomplete after `maxAgeMs` and report them as delivery failures. */
+  /**
+   * Discard messages still incomplete after `maxAgeMs` and report them as delivery failures;
+   * erase skipped message keys that never saw a chunk within SKIPPED_KEY_TTL_MS.
+   */
   expire(now = Date.now(), maxAgeMs = 30_000): DeliveryFailure[] {
     const failed: DeliveryFailure[] = [];
     for (const [id, p] of this.pending) {
@@ -222,14 +313,21 @@ export class Session {
         failed.push({ msg_id: id, reason: `incomplete (${p.chunks.size}/${p.total} chunks)` });
       }
     }
+    for (const [seq, k] of this.heldKeys) if (!k.used && now - k.at > SKIPPED_KEY_TTL_MS) this.eraseKey(seq);
     this.failures.push(...failed);
     return failed;
   }
 
-  /** Erase all session secrets. */
+  /** Number of message keys currently held (bounded by MAX_SKIPPED_KEYS). */
+  get heldKeyCount(): number {
+    return this.heldKeys.size;
+  }
+
+  /** Erase all session secrets: both chain keys, every held message key and the resume secret. */
   close(): void {
-    this.sendKey.fill(0);
-    this.recvKey.fill(0);
+    this.sendChain.fill(0);
+    this.recvChain.fill(0);
+    for (const seq of [...this.heldKeys.keys()]) this.eraseKey(seq);
     this.resumeSecret.fill(0);
     this.pending.clear();
     this.closed = true;
@@ -237,7 +335,7 @@ export class Session {
 
   /** True when every secret has been erased (used by tests and evidence). */
   secretsErased(): boolean {
-    return [this.sendKey, this.recvKey, this.resumeSecret].every((b) => b.every((x) => x === 0));
+    return this.heldKeys.size === 0 && [this.sendChain, this.recvChain, this.resumeSecret].every((b) => b.every((x) => x === 0));
   }
 }
 
