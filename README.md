@@ -18,7 +18,7 @@ Node built-ins, so there is no `npm install` for the core.
 ```sh
 git clone https://github.com/Shadow-46/trust-but-verify.git
 cd trust-but-verify
-npm test                     # 61 tests (one is Linux-only and skipped on Windows)
+npm test                     # 86 tests (one is Linux-only and skipped on Windows)
 ```
 
 Run one request (the judging worker does exactly this, one process per request):
@@ -27,6 +27,17 @@ echo '{"op":"setup","owners":{"brief":"maya"},"contents":{"brief":"demo note"},"
 echo '{"op":"read","actor":"maya","asset":"brief","request_id":"r01"}' | node track4_service.mjs
 ```
 State is kept in `$TRACK4_STATE_DIR`, or `<os temp dir>/trust-but-verify` if unset.
+
+### Dependencies
+| Part | Needs | Install |
+|---|---|---|
+| Core service, tests, demos (`track4_service.mjs`, `core/`, `dist/`, `tests/`) | **Node.js 24.11.1+ only**, built-ins only (`node:crypto` = OpenSSL 3.5). Zero runtime dependencies. | nothing (no `npm install`) |
+| Operator console (`dashboard/`, optional, demo only) | Next.js 16.4.6, React 19.3.0, Tailwind CSS 4.3.3, shadcn 4.23 with Base UI 1.9, motion 14.14, lucide-react 1.80, sonner 2.0, next-themes 0.4, zod 4.6, class-variance-authority 0.7, tw-animate-css 1.4 (exact ranges in `dashboard/package.json`, pinned by `dashboard/package-lock.json`) | `cd dashboard && npm install && npm run dev` → http://127.0.0.1:3000 |
+| ML-KEM interop check (optional) | Python 3.12 + `pqcrypto==0.4.0` (same as the judging runtime) | `python -m pip install pqcrypto==0.4.0` |
+| Judge-parity run (optional) | Docker, image `node:24.11.1` (pulled once, then runs offline) | install Docker Desktop / Engine |
+
+Windows note for the console: if Next.js reports a missing `lightningcss.win32-x64-msvc.node`, run `npm install`
+in `dashboard/` again and move `dashboard/.next` aside before `npm run dev`.
 
 ## Verify against the official toolkit
 ```sh

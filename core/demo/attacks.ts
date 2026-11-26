@@ -25,7 +25,8 @@ const SETUP = {
   owners: { "design-doc": "maya", "payroll.xlsx": "omar" },
   contents: { "design-doc": "Q3 design (confidential)", "payroll.xlsx": "salary bands (confidential)" },
   disabled: [],
-  key_material: "synthetic-attack-lab",
+  // Generated per run: no fixed secret string in product code (it is only synthetic setup input).
+  key_material: `synthetic-${randomBytes(8).toString("hex")}`,
 };
 
 function withEnv<T>(env: Record<string, string | undefined>, fn: () => T): T {
