@@ -16,6 +16,9 @@ export type StatePaths = {
   audit: string;
   keysDir: string;
   masterKey: string;
+  auditKey: string;
+  auditPub: string;
+  auditHead: string;
 };
 
 export function statePaths(root: string = stateDir()): StatePaths {
@@ -26,5 +29,8 @@ export function statePaths(root: string = stateDir()): StatePaths {
     audit: join(root, "audit.jsonl"),
     keysDir,
     masterKey: join(keysDir, "master.key"),
+    auditKey: join(keysDir, "audit.key"),
+    auditPub: join(keysDir, "audit.pub"),
+    auditHead: join(root, "audit.head.json"),
   };
 }

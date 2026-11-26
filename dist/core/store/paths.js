@@ -17,6 +17,9 @@ export function stateDir()         {
                 
                   
                     
+                   
+                   
+                    
   
 
 export function statePaths(root         = stateDir())             {
@@ -27,5 +30,8 @@ export function statePaths(root         = stateDir())             {
     audit: join(root, "audit.jsonl"),
     keysDir,
     masterKey: join(keysDir, "master.key"),
+    auditKey: join(keysDir, "audit.key"),
+    auditPub: join(keysDir, "audit.pub"),
+    auditHead: join(root, "audit.head.json"),
   };
 }
