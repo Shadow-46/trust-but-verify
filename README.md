@@ -69,8 +69,16 @@ compared with stripping types at runtime.
 - The master key lives on the same host as the data unless `TRACK4_MASTER_KEY` is supplied by an
   external KMS; an attacker with full host access and the key file can decrypt.
 - `setup` is a trusted operator operation and resets all state.
-- The audit chain detects edits; signing it with ML-DSA (so a host attacker cannot rebuild the
-  chain) is planned.
+- The audit chain detects edited or reordered records, but not a truncated tail, and a host
+  attacker could rebuild an unsigned chain. Planned: ML-DSA-signed records with the chain head
+  stored inside the authenticated state.
+- The state HMAC detects edits but not **rollback** to an older, validly authenticated
+  `state.json` (which could undo a revocation). Planned: a monotonic version counter bound to the
+  audit chain head.
+- A reused `request_id` is only honoured as an identical retry of an earlier allow; any other reuse
+  is denied without content.
+- A request killed while holding the state lock is detected by PID and its lock is broken
+  immediately; a live but hung holder is broken after 3 s.
 
 ## Layout
 | Path | What |
