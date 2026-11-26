@@ -194,11 +194,11 @@ test("audit log verification detects an edited record", () => {
   call(dir, { op: "read", actor: "maya", asset: "brief", request_id: "v1" });
   call(dir, { op: "read", actor: "omar", asset: "brief", request_id: "v2" });
   const paths = statePaths(dir);
-  assert.deepEqual(verifyAudit(paths), { ok: true, records: 3, first_bad_seq: null });
+  assert.deepEqual(verifyAudit(paths), { ok: true, records: 3, first_bad_seq: null, signatures_checked: true });
   const lines = readFileSync(paths.audit, "utf8").trimEnd().split("\n");
   lines[2] = lines[2].replace('"decision":"deny"', '"decision":"allow"');
   writeFileSync(paths.audit, lines.join("\n") + "\n");
-  assert.deepEqual(verifyAudit(paths), { ok: false, records: 3, first_bad_seq: 3 });
+  assert.deepEqual(verifyAudit(paths), { ok: false, records: 3, first_bad_seq: 3, signatures_checked: true });
 });
 
 test("concurrent processes do not lose decisions or break the audit chain", async () => {

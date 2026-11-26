@@ -4,6 +4,7 @@ import { rmSync } from "node:fs";
 import { seal } from "./crypto/aead.js";
 import { decodeBase64Strict } from "./crypto/encoding.js";
 import { encapsulate, importMlKem768PublicKey } from "./crypto/kem.js";
+import { generateSigningKeyPair } from "./crypto/sign.js";
 import { createMasterKey, deriveKeys, newDataKey, wrapDataKey } from "./keys/keystore.js";
 import { decide } from "./access/policy.js";
                                                    
@@ -12,7 +13,7 @@ import { saveState } from "./state.js";
                                         
 import { assetAad, openContext, readBody } from "./vault.js";
                                           
-import { withLock } from "./store/fsx.js";
+import { atomicWriteFile, withLock } from "./store/fsx.js";
 import { statePaths } from "./store/paths.js";
                                                    
 import { IntegrityError, RequestError } from "./errors.js";
@@ -111,6 +112,7 @@ function authorizeAndRecord(
       asset,
       decision: decision.decision,
       reason: decision.reason,
+      state_version: ctx.state.version,
     },
     records,
   );
@@ -139,6 +141,9 @@ function opSetup(req                         , paths            )       {
     rmSync(paths.keysDir, { recursive: true, force: true });
 
     const master = createMasterKey(paths);
+    const auditKeys = generateSigningKeyPair();
+    atomicWriteFile(paths.auditKey, auditKeys.privateKey.toString("base64"));
+    atomicWriteFile(paths.auditPub, auditKeys.publicKey.toString("base64"));
     const salt = randomBytes(32);
     const setupId = randomBytes(16).toString("hex");
     const keys = deriveKeys(master, salt);
@@ -153,13 +158,20 @@ function opSetup(req                         , paths            )       {
       activeKeyVersion: 1,
       keys: [wrapDataKey(keys.kek, setupId, 1, dek)],
       assets: new Map(),
+      version: 0,
+      auditSeq: 0,
+      auditHash: "",
     };
     for (const [asset, body] of contents) {
       state.assets.set(asset, { version: 1, sealed: seal(dek, Buffer.from(body, "utf8"), assetAad(setupId, asset, 1)) });
     }
     dek.fill(0);
     saveState(paths, keys.stateMac, state);
-    appendAudit(paths, { type: "setup", request_id: null, actor: null, asset: null, decision: null, reason: null }, []);
+    appendAudit(
+      paths,
+      { type: "setup", request_id: null, actor: null, asset: null, decision: null, reason: null, state_version: state.version },
+      [],
+    );
     return { ready: true };
   });
 }
@@ -180,7 +192,15 @@ function opRevoke(req                         , paths            )       {
     const ctx = openContext(paths);
     ctx.state.revoked.add(actor);
     saveState(paths, ctx.keys.stateMac, ctx.state); // persisted before acknowledging
-    appendAudit(paths, { type: "revoke", request_id: null, actor, asset: null, decision: null, reason: "revoked" });
+    appendAudit(paths, {
+      type: "revoke",
+      request_id: null,
+      actor,
+      asset: null,
+      decision: null,
+      reason: "revoked",
+      state_version: ctx.state.version,
+    });
     return { revoked: true };
   });
 }
