@@ -1,0 +1,68 @@
+// Minimal RFC 4180 CSV reader (quoted fields, "" escapes, CRLF or LF).
+// Zero dependencies: the judged runtime installs nothing.
+
+export function parseCsv(text: string): string[][] {
+  const rows: string[][] = [];
+  let row: string[] = [];
+  let field = "";
+  let inQuotes = false;
+  let i = 0;
+  // Strip a UTF-8 BOM if an editor added one.
+  if (text.charCodeAt(0) === 0xfeff) i = 1;
+
+  for (; i < text.length; i++) {
+    const c = text[i];
+    if (inQuotes) {
+      if (c === '"') {
+        if (text[i + 1] === '"') {
+          field += '"';
+          i++;
+        } else {
+          inQuotes = false;
+        }
+      } else {
+        field += c;
+      }
+    } else if (c === '"' && field === "") {
+      inQuotes = true;
+    } else if (c === ",") {
+      row.push(field);
+      field = "";
+    } else if (c === "\n" || c === "\r") {
+      if (c === "\r" && text[i + 1] === "\n") i++;
+      row.push(field);
+      field = "";
+      rows.push(row);
+      row = [];
+    } else {
+      field += c;
+    }
+  }
+  if (inQuotes) throw new Error("CSV: unterminated quoted field");
+  if (field !== "" || row.length > 0) {
+    row.push(field);
+    rows.push(row);
+  }
+  // Drop blank lines.
+  return rows.filter((r) => !(r.length === 1 && r[0] === ""));
+}
+
+/** Parse CSV with a header row into one Map per data row (keys = header names). */
+export function parseCsvRecords(text: string): Map<string, string>[] {
+  const rows = parseCsv(text);
+  if (rows.length === 0) return [];
+  const header = rows[0].map((h) => h.trim());
+  const seen = new Set<string>();
+  for (const h of header) {
+    if (seen.has(h)) throw new Error(`CSV: duplicate column "${h}"`);
+    seen.add(h);
+  }
+  return rows.slice(1).map((r, n) => {
+    if (r.length !== header.length) {
+      throw new Error(`CSV: data row ${n + 1} has ${r.length} fields, expected ${header.length}`);
+    }
+    const rec = new Map<string, string>();
+    header.forEach((h, k) => rec.set(h, r[k]));
+    return rec;
+  });
+}
