@@ -7,7 +7,7 @@ when an identity gains unexpected privileges or moves between services.
 Built for Yugaantar DevForge 2026, Track 4.
 
 > Work in progress: the protected-resource service, key rotation and multi-node revocation are
-> complete; crash recovery, backups, signed logs, messaging and the detector are complete; detector metrics and the operator dashboard are being added.
+> complete; crash recovery, backups, signed logs, messaging and the detector are complete; the operator dashboard is being added.
 
 **Docs:** [Evidence for all 12 goals](docs/EVIDENCE.md) · [Threat model](docs/THREAT_MODEL.md)
 
@@ -18,7 +18,7 @@ Node built-ins, so there is no `npm install` for the core.
 ```sh
 git clone https://github.com/Shadow-46/trust-but-verify.git
 cd trust-but-verify
-npm test                     # 59 tests (one is Linux-only and skipped on Windows)
+npm test                     # 61 tests (one is Linux-only and skipped on Windows)
 ```
 
 Run one request (the judging worker does exactly this, one process per request):
@@ -126,6 +126,9 @@ npm run demo:cluster        # runs the scenario and rewrites evidence/t6-cluster
 - **Session resumption (supported):** a resume request must be signed by the same identity key the
   session was established with; a different identity, a re-keyed identity, a replayed request, or an
   identity the current policy no longer authorizes is refused. Each resumption derives fresh keys.
+
+## Detector accuracy (goals 6–8)
+`npm run demo:detector` scores the rule-based detector on seeded synthetic logs (practice CSV format; ground truth never given to the detector). Results in `evidence/t5-detector.json` and `docs/EVIDENCE.md`: per-incident F1 1 (standard) and 1 (hard: borrowed approvals, successful lateral hops, late-delivered approvals), median time-to-alert 1560.25 / 1092.25 ms, 0 false alerts per 1,000 benign events. These are upper bounds: the generator models the same documented environment the rules encode.
 
 ## Performance
 One request = one Node process. Measured in Docker `node:24.11.1` on a native filesystem:
