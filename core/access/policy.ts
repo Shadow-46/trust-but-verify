@@ -1,6 +1,12 @@
 import type { State } from "../state.ts";
 
-export type DenyReason = "unknown_asset" | "disabled" | "revoked" | "not_owner" | "integrity_failure";
+export type DenyReason =
+  | "unknown_asset"
+  | "disabled"
+  | "revoked"
+  | "not_owner"
+  | "integrity_failure"
+  | "request_id_reused";
 export type Decision =
   | { decision: "allow"; reason: "owner" }
   | { decision: "deny"; reason: DenyReason };

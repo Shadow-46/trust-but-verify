@@ -116,7 +116,15 @@ function authorizeAndRecord(
   asset        ,
   requestId        ,
 )                                        {
+  const records = readAudit(paths);
+  const first = findDecision(records, requestId);
   let decision = decide(ctx.state, actor, asset);
+  // A reused request ID is honoured only as an idempotent retry of an earlier allow for the
+  // same actor and asset. Anything else is refused, so a body can never be returned under a
+  // request ID whose recorded decision is "deny".
+  if (first && !(first.decision === "allow" && first.actor === actor && first.asset === asset)) {
+    decision = { decision: "deny", reason: "request_id_reused" };
+  }
   let body                    ;
   if (decision.decision === "allow") {
     try {
@@ -126,12 +134,10 @@ function authorizeAndRecord(
       decision = { decision: "deny", reason: "integrity_failure" };
     }
   }
-  const records = readAudit(paths);
-  const duplicate = findDecision(records, requestId) !== undefined;
   appendAudit(
     paths,
     {
-      type: duplicate ? "duplicate_request_id" : "access_decision",
+      type: first ? "duplicate_request_id" : "access_decision",
       request_id: requestId,
       actor,
       asset,

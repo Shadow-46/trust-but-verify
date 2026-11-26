@@ -153,6 +153,25 @@ test("duplicate request_id keeps the first recorded decision", () => {
   assert.ok(readAudit(statePaths(dir)).some((r) => r.type === "duplicate_request_id"));
 });
 
+test("a request_id first recorded as deny can never return a body later", () => {
+  const dir = setUp();
+  assert.deepEqual(call(dir, { op: "read", actor: "omar", asset: "brief", request_id: "X" }).out, { decision: "deny" });
+  assert.deepEqual(call(dir, { op: "read", actor: "maya", asset: "brief", request_id: "X" }).out, { decision: "deny" });
+  assert.deepEqual(call(dir, { op: "audit", request_id: "X" }).out, { request_id: "X", decision: "deny" });
+  // An identical retry of an allowed request stays idempotent.
+  call(dir, { op: "read", actor: "maya", asset: "brief", request_id: "Y" });
+  assert.equal(call(dir, { op: "read", actor: "maya", asset: "brief", request_id: "Y" }).out.decision, "allow");
+});
+
+test("a lock left by a killed request does not block the next request", () => {
+  const dir = setUp();
+  writeFileSync(join(dir, ".lock"), "2147483646 0"); // PID that cannot exist
+  const started = Date.now();
+  const r = call(dir, { op: "read", actor: "maya", asset: "brief", request_id: "after-crash" });
+  assert.equal(r.out.decision, "allow");
+  assert.ok(Date.now() - started < 3000, `took ${Date.now() - started} ms`);
+});
+
 test("malformed requests return fixed error codes without stack traces", () => {
   const dir = setUp();
   const cases: [string, string][] = [
