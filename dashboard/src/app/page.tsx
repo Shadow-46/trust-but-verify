@@ -17,7 +17,7 @@ type Res = { ok: boolean; out: any; blocked?: boolean; ms?: number };
 type Row = { seq: number; ts: string; type: string; actor: string | null; asset: string | null; decision: string | null; reason: string | null; hash: string };
 type Section = "overview" | "files" | "users" | "audit" | "keys" | "nodes" | "messages" | "alerts" | "lab";
 
-const USERS = ["maya", "omar", "dana", "mallory"];
+const USERS = ["maya", "omar", "lee", "dana", "mallory"];
 const BECAUSE: Record<string, string> = {
   owner: "the identity owns it and has not been revoked or disabled",
   not_owner: "the identity does not own this file",

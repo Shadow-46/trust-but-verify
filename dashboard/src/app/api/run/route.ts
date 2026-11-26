@@ -75,11 +75,12 @@ const ID = /^[A-Za-z0-9._-]{1,64}$/;
 
 const DEMO = {
   op: "setup",
-  owners: { "design-doc": "maya", "payroll.xlsx": "omar", roadmap: "maya" },
+  owners: { "design-doc": "maya", "payroll.xlsx": "omar", roadmap: "maya", "budget.xlsx": "lee" },
   contents: {
     "design-doc": "Q3 design: PQC migration plan (confidential)",
     "payroll.xlsx": "salary bands v7 (confidential)",
     roadmap: "2027 roadmap draft",
+    "budget.xlsx": "team budget FY27 (internal)",
   },
   disabled: ["dana"],
 };
@@ -92,7 +93,7 @@ function run(args: string[], input?: unknown) {
     cwd: ROOT,
     input: input === undefined ? undefined : JSON.stringify(input),
     // The demo runs with the external witness and auto-quarantine enabled.
-    env: { ...process.env, TRACK4_STATE_DIR: STATE, TRACK4_WITNESS_DIR: WITNESS, TRACK4_AUTO_QUARANTINE: "1" },
+    env: { ...process.env, TRACK4_STATE_DIR: STATE, TRACK4_WITNESS_DIR: WITNESS, TRACK4_AUTO_QUARANTINE: "1", TRACK4_LAB_DIR: LAB, TRACK4_CLUSTER_DIR: CLUSTER },
     encoding: "utf8",
     timeout: 20_000,
   });
@@ -123,6 +124,29 @@ export async function POST(request: Request) {
   };
   try {
     switch (body.action) {
+      case "lab-catalog":
+        return Response.json(ops("lab-catalog"));
+      case "lab-runs":
+        return Response.json(ops("lab-runs"));
+      case "lab-start": {
+        const id = str("id");
+        const cat = ops("lab-catalog").out as { id: string; needs_cluster: boolean }[];
+        // Cluster storyboards need the live node processes; start them if they are not running.
+        if (cat.find((a) => a.id === id)?.needs_cluster && (!g.__tbvPolicy || NODE_NAMES.some((n) => !nodes.has(n)))) {
+          NODE_NAMES.forEach(stopNode);
+          stopPolicyServer();
+          ops("cluster-init", CLUSTER);
+          await startPolicyServer();
+          NODE_NAMES.forEach(startNode);
+          await new Promise((r) => setTimeout(r, 1200));
+        }
+        return Response.json(ops("lab-start", id));
+      }
+      case "lab-step": {
+        const runId = typeof body.run === "string" && /^[0-9]+-[0-9a-f]{6}$/.test(body.run) ? body.run : null;
+        if (!runId) throw new Error("invalid run");
+        return Response.json(ops("lab-step", runId));
+      }
       case "monitor": {
         // Read-only snapshot for the Live Monitor (laptop B): state, log tail, alerts, cluster, Lab step.
         const r = ops("monitor", ...(existsSync(join(CLUSTER, "demo-device.json")) ? [CLUSTER] : []));
@@ -143,6 +167,7 @@ export async function POST(request: Request) {
       case "reset":
         rmSync(SNAPSHOT, { force: true });
         rmSync(SESSION, { force: true });
+        rmSync(LAB_CURRENT, { force: true });
         return Response.json(adapter({ ...DEMO, key_material: `synthetic-${randomBytes(8).toString("hex")}` }));
       case "setup":
         return Response.json(adapter({ ...DEMO, key_material: `synthetic-${randomBytes(8).toString("hex")}` }));
