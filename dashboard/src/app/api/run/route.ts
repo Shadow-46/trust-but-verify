@@ -128,6 +128,9 @@ export async function POST(request: Request) {
         return Response.json(ops("lab-catalog"));
       case "lab-runs":
         return Response.json(ops("lab-runs"));
+      case "lab-idle":
+        // The Lab is between attacks: the monitor stops showing the previous attack's last step.
+        return Response.json(ops("lab-idle"));
       case "lab-start": {
         const id = str("id");
         const cat = ops("lab-catalog").out as { id: string; needs_cluster: boolean }[];
@@ -168,6 +171,7 @@ export async function POST(request: Request) {
         rmSync(SNAPSHOT, { force: true });
         rmSync(SESSION, { force: true });
         rmSync(LAB_CURRENT, { force: true });
+        ops("lab-abandon"); // unfinished Lab runs must not be resumed against the reset service
         return Response.json(adapter({ ...DEMO, key_material: `synthetic-${randomBytes(8).toString("hex")}` }));
       case "setup":
         return Response.json(adapter({ ...DEMO, key_material: `synthetic-${randomBytes(8).toString("hex")}` }));

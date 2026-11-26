@@ -10,7 +10,7 @@ import { securityAlerts } from "./defense/guard.js";
 import { listAttacks, runAttack } from "./demo/attacks.js";
 import { messagingDemo } from "./demo/messagingDemo.js";
 import { netClusterBench, netMessagingDemo } from "./demo/network.js";
-import { labCatalog, labRuns, labStart, labStep } from "./demo/liveLab.js";
+import { labAbandon, labCatalog, labIdle, labRuns, labStart, labStep } from "./demo/liveLab.js";
 import { clusterAlerts, clusterEnrol, clusterInit, clusterLog, clusterRevoke, clusterStatus, verifyClusterLogs } from "./demo/liveCluster.js";
 import { createBackup, restoreBackup } from "./backup.js";
 import { rotateStoredDataKey } from "./keys/rotation.js";
@@ -111,6 +111,10 @@ export function runOps(argv          )                                 {
       return { code: 0, out: labStep(arg) };
     case "lab-runs":
       return { code: 0, out: labRuns() };
+    case "lab-idle":
+      return { code: 0, out: labIdle() };
+    case "lab-abandon":
+      return { code: 0, out: labAbandon() };
     case "monitor": {
       // One read-only snapshot for the Live Monitor (each part fails independently, never secrets).
       const part =    (fn         ) => {

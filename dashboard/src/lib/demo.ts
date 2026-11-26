@@ -30,14 +30,58 @@ const RULE: Record<string, string> = {
   data_integrity: "Tampered file detected",
   state_integrity: "Tampered state or log detected",
   malformed_input_burst: "Flood of malformed requests",
+  suspicious_identifier: "Injection attempt in an ID",
+  encrypted_copy_refused: "Encrypted copy of another's file refused",
+  replayed_request: "Replayed request",
+  request_for_another_node: "Request replayed to another node",
+  bad_request_signature: "Forged request signature",
+  revoked_device_used: "Revoked device still in use",
+  stale_request: "Stale or future request",
+  unknown_device: "Unknown device",
+  forged_or_old_policy: "Forged or old policy refused",
 };
 
 export const ruleLabel = (rule: string) => RULE[rule] ?? rule.replace(/_/g, " ");
 
-export type Row = { seq: number; ts: string; type: string; actor: string | null; asset: string | null; decision: string | null; reason: string | null; hash: string };
+/** `service` is set on rows from a cluster node's own signed log ("node-a"…); absent for the file service. */
+export type Row = { seq: number; ts: string; type: string; actor: string | null; asset: string | null; decision: string | null; reason: string | null; hash: string; service?: string; request_id?: string | null };
+
+const NODE_BECAUSE: Record<string, string> = {
+  authorized: "device enrolled, signature valid, addressed here, fresh nonce",
+  device_revoked: "the device was revoked",
+  actor_revoked: "the identity was revoked",
+  replayed_request: "its nonce was already used (replay)",
+  wrong_node: "it was signed for another node",
+  bad_signature: "its ML-DSA signature is invalid",
+  stale_or_future_request: "its timestamp is outside ±30 s",
+  unknown_device: "the device was never enrolled",
+  device_owner_mismatch: "the device belongs to someone else",
+  key_version_retired: "its key version is retired",
+  in_flight_transfer: "an in-flight transfer on its original key version",
+};
+
+/** A record from a node's own signed log as a sentence. */
+function describeNode(r: Row): { text: string; tone: "good" | "bad" | "warn" | "neutral" } {
+  const node = r.service ?? "node";
+  switch (r.type) {
+    case "node_decision":
+      return r.decision === "allow"
+        ? { text: `${node} allowed ${r.actor}'s ${r.asset}: ${NODE_BECAUSE[r.reason ?? ""] ?? r.reason}`, tone: "good" }
+        : { text: `${node} refused ${r.actor}'s ${r.asset}: ${NODE_BECAUSE[r.reason ?? ""] ?? r.reason}`, tone: "bad" };
+    case "policy_adopted":
+      return { text: `${node} verified and adopted ${r.reason?.replace("adopted ", "") ?? "a new policy"}`, tone: "neutral" };
+    case "policy_rejected":
+      return { text: `${node} refused a policy (${r.request_id ?? "?"}): ${r.reason === "bad_signature" ? "not signed by the control plane" : "older than the one it holds"}`, tone: "bad" };
+    default:
+      return describe({ ...r, service: undefined });
+  }
+}
+
+export { describeNode };
 
 /** One audit record as a sentence an operator (or judge) can read aloud. */
 export function describe(r: Row): { text: string; tone: "good" | "bad" | "warn" | "neutral" } {
+  if (r.service && r.type !== "security_alert") return describeNode(r);
   const who = r.actor ?? "someone";
   switch (r.type) {
     case "access_decision":

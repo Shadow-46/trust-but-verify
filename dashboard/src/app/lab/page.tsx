@@ -3,7 +3,8 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import { ArrowLeft, ArrowRight, Check, Monitor, RotateCcw, ShieldCheck, ShieldX, Skull, User, UserCog, X } from "lucide-react";
-import { api } from "@/lib/demo";
+import { api, ruleLabel } from "@/lib/demo";
+import { AttackScene } from "@/components/attack-scene";
 
 /**
  * Live Attack Lab (laptop A). Pick an attack, press Space for each step: every
@@ -14,7 +15,9 @@ import { api } from "@/lib/demo";
  */
 
 type Check = { name: string; pass: boolean };
-type Ev = { step: number; actor: "attacker" | "operator" | "user" | "service"; title: string; caption: string; checks: Check[]; evidence: string; tone: "good" | "bad" | "alarm" | "neutral"; audit_seq: number | null };
+type Rec = { service: string; seq: number; type: string; decision: string | null; reason: string | null };
+type Alert = { rule: string; identity: string; service: string; events: string; detail: string };
+type Ev = { step: number; actor: "attacker" | "operator" | "user" | "service"; title: string; caption: string; checks: Check[]; evidence: string; tone: "good" | "bad" | "alarm" | "neutral"; audit_seq: number | null; records?: Rec[]; alerts?: Alert[] };
 type Attack = { id: string; name: string; summary: string; impact: string; defense: string; live: boolean; needs_cluster: boolean; steps: { actor: Ev["actor"]; title: string; caption: string }[] };
 
 const ACTOR = {
@@ -51,6 +54,7 @@ export default function Lab() {
 
   const choose = (id: string) => {
     if (busy) return;
+    if (id !== sel) void api("lab-idle"); // the monitor stops showing the previous attack
     setSel(id);
     setRun(null);
     setView(0);
@@ -209,7 +213,10 @@ export default function Lab() {
                 </div>
 
                 {/* lanes */}
-                <Stage ev={ev} serviceState={serviceState} />
+                <div className="mt-5">
+                  <AttackScene attack={attack.id} name={attack.name} step={view} events={run.events} />
+                </div>
+                <ServiceBadge state={serviceState} />
 
                 {/* caption */}
                 <AnimatePresence mode="wait">
@@ -231,8 +238,20 @@ export default function Lab() {
                         )}
                         <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 0.6 + ev.checks.length * 0.18 }} className="mt-3 flex flex-wrap items-center gap-2 font-mono text-xs text-[#3A404A]">
                           <span className="rounded bg-[#F6F7F8] px-2 py-1" style={{ color: toneColor(ev.tone) }}>{ev.evidence}</span>
-                          {ev.audit_seq !== null && <span className="rounded bg-[#EEF2FF] px-2 py-1 text-[#1D4ED8]">signed audit record #{ev.audit_seq}</span>}
+                          {(ev.records ?? []).filter((r) => r.type !== "security_alert").slice(0, 4).map((r) => (
+                            <span key={`${r.service}-${r.seq}`} className="rounded bg-[#EEF2FF] px-2 py-1 text-[#1D4ED8]">signed record {r.service === "file-service adapter" ? "" : `${r.service} `}#{r.seq}</span>
+                          ))}
                         </motion.div>
+                        {(ev.alerts ?? []).length > 0 && (
+                          <motion.ul initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 0.8 + ev.checks.length * 0.18 }} className="mt-3 space-y-1.5">
+                            {(ev.alerts ?? []).map((a, i) => (
+                              <li key={i} className="rounded-md border border-[#F1C9C5] bg-[#FDECEA] px-3 py-1.5 text-sm">
+                                <span className="font-semibold text-[#B42318]">Alert: {ruleLabel(a.rule)}</span>
+                                <span className="ml-2 font-mono text-xs text-[#3A404A]">identity {a.identity} · service {a.service} · event {a.events}</span>
+                              </li>
+                            ))}
+                          </motion.ul>
+                        )}
                       </>
                     ) : (
                       <>
@@ -253,7 +272,7 @@ export default function Lab() {
                         <div className={`text-lg font-semibold ${outcome === "good" ? "text-[#0F7B4F]" : "text-[#B42318]"}`}>{outcome === "good" ? "Blocked. The defence held." : "Not blocked"}</div>
                         <div className="text-sm text-[#3A404A]">{attack.defense}</div>
                       </div>
-                      <button onClick={() => { setRun(null); setView(0); }} className="rounded-md border border-[#E3E5E8] bg-white px-3 py-1.5 text-sm">Run again</button>
+                      <button onClick={() => { setRun(null); setView(0); void api("lab-idle"); }} className="rounded-md border border-[#E3E5E8] bg-white px-3 py-1.5 text-sm">Run again</button>
                     </motion.div>
                   )}
                 </AnimatePresence>
@@ -285,62 +304,13 @@ function Info({ title, children }: { title: string; children: React.ReactNode })
   );
 }
 
-/** Actor → wire → service, with the step's request travelling across and the verdict at the service. */
-function Stage({ ev, serviceState }: { ev: Ev | null; serviceState: "live" | "closed" }) {
-  const actor = ev ? ACTOR[ev.actor] : ACTOR.attacker;
-  const Icon = actor.icon;
-  const travels = ev && ev.actor !== "service";
-  const refused = ev && ev.actor === "attacker" && ev.checks.some((c) => !c.pass);
-  const closed = serviceState === "closed";
+/** Live / fail-closed status of the service, from the events seen so far. */
+function ServiceBadge({ state }: { state: "live" | "closed" }) {
+  const closed = state === "closed";
   return (
-    <div className="relative mt-5 h-44 overflow-hidden rounded-xl border border-[#E3E5E8] bg-white">
-      {/* wire */}
-      <div className="absolute left-[16%] right-[16%] top-1/2 h-0.5 -translate-y-1/2 bg-[repeating-linear-gradient(90deg,#C9CED6_0_10px,transparent_10px_18px)]" />
-      <div className="absolute left-1/2 top-[calc(50%+14px)] -translate-x-1/2 text-[11px] text-[#5C6370]">network</div>
-
-      {/* actor */}
-      <AnimatePresence mode="wait">
-        <motion.div key={ev?.actor ?? "none"} initial={{ opacity: 0, x: -10 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0 }} className="absolute left-[6%] top-1/2 flex -translate-y-1/2 flex-col items-center gap-1.5">
-          <div className="flex size-16 items-center justify-center rounded-full" style={{ backgroundColor: actor.bg }}>
-            <Icon className="size-8" style={{ color: actor.color }} />
-          </div>
-          <span className="text-xs font-medium">{ev ? actor.label : "Attacker"}</span>
-        </motion.div>
-      </AnimatePresence>
-
-      {/* request packet */}
-      <AnimatePresence>
-        {travels && (
-          <motion.div
-            key={`pkt-${ev!.step}`}
-            className="absolute top-1/2 -translate-y-1/2"
-            initial={{ left: "16%", opacity: 0 }}
-            animate={refused ? { left: ["16%", "74%", "66%"], opacity: [1, 1, 0.9] } : { left: ["16%", "78%"], opacity: [1, 1] }}
-            transition={{ duration: refused ? 1.1 : 0.8, ease: [0.22, 1, 0.36, 1], times: refused ? [0, 0.7, 1] : undefined }}
-          >
-            <div className="flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-medium text-white shadow" style={{ backgroundColor: actor.color }}>
-              {ev!.actor === "attacker" ? "malicious request" : ev!.actor === "operator" ? "operator action" : "request"}
-            </div>
-            {refused && (
-              <motion.div initial={{ scale: 0 }} animate={{ scale: 1 }} transition={{ delay: 0.75 }} className="absolute -right-3 -top-3 flex size-6 items-center justify-center rounded-full bg-white shadow ring-2 ring-[#B42318]">
-                <X className="size-4 text-[#B42318]" />
-              </motion.div>
-            )}
-          </motion.div>
-        )}
-      </AnimatePresence>
-
-      {/* service */}
-      <motion.div
-        className="absolute right-[6%] top-1/2 flex -translate-y-1/2 flex-col items-center gap-1.5"
-        animate={closed ? { x: [0, -6, 6, -4, 4, 0] } : { x: 0 }}
-        transition={{ duration: 0.5 }}
-      >
-        <motion.div className="flex size-16 items-center justify-center rounded-full" animate={{ backgroundColor: closed ? "#FDECEA" : "#E7F5EE" }}>
-          {closed ? <ShieldX className="size-8 text-[#B42318]" /> : <ShieldCheck className="size-8 text-[#0F7B4F]" />}
-        </motion.div>
-        <span className="text-xs font-medium">{closed ? "Service: fail-closed" : "Service: live"}</span>
-      </motion.div>
-    </div>
+    <motion.div animate={closed ? { x: [0, -6, 6, -4, 4, 0] } : { x: 0 }} transition={{ duration: 0.5 }} className={`mt-2 inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-medium ${closed ? "bg-[#FDECEA] text-[#B42318]" : "bg-[#E7F5EE] text-[#0F7B4F]"}`}>
+      {closed ? <ShieldX className="size-4" /> : <ShieldCheck className="size-4" />}
+      {closed ? "Service: fail-closed" : "Service: live"}
+    </motion.div>
   );
 }

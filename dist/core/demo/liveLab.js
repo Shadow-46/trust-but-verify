@@ -21,7 +21,7 @@ import { atomicWriteFile } from "../store/fsx.js";
 import { statePaths } from "../store/paths.js";
                                                     
 import { listAttacks, runAttack } from "./attacks.js";
-import { NODE_NAMES, recordAttempt } from "./liveCluster.js";
+import { clusterAlerts, clusterLog, NODE_NAMES, recordAttempt } from "./liveCluster.js";
 
 /**
  * Live Attack Lab: presenter-paced storyboards that attack the LIVE demo
@@ -39,8 +39,62 @@ import { NODE_NAMES, recordAttempt } from "./liveCluster.js";
                                                           
                                                  
                                              
-                                                                                                                                                                           
-                                                                                      
+/** A signed record this step produced, in the service log or a node's own log. */
+                                                                                                                 
+/** A security alert this step raised, naming identity, service and event. */
+                                                                                                     
+                        
+                                                                                                                                                  
+                                                                                          
+                        
+                      
+  
+                                                                                                
+
+const SERVICE_NAME = "file-service adapter";
+
+/** Keys of every signed record and alert that exist now, to diff what one step produced. */
+function evidenceKeys(c     )                                                {
+  const records = new Set        ();
+  const alerts = new Set        ();
+  try {
+    for (const r of readAudit(c.paths)) records.add(`${SERVICE_NAME}#${r.seq}`);
+  } catch {
+    // fail-closed log: nothing to diff
+  }
+  for (const r of clusterLog(c.cluster, 400)) records.add(`${r.service}#${r.seq}`);
+  for (const a of [...securityAlerts(c.paths), ...clusterAlerts(c.cluster, 400)]) alerts.add(`${a.service}|${a.ts}|${a.rule}`);
+  return { records, alerts };
+}
+
+/** The signed records and alerts that appeared since `before`. */
+function producedSince(c     , before                                               )                                                 {
+  const records               = [];
+  try {
+    for (const r of readAudit(c.paths)) if (!before.records.has(`${SERVICE_NAME}#${r.seq}`)) records.push({ service: SERVICE_NAME, seq: r.seq, type: r.type, decision: r.decision, reason: r.reason });
+  } catch {
+    // fail-closed log
+  }
+  for (const r of clusterLog(c.cluster, 400)) if (!before.records.has(`${r.service}#${r.seq}`)) records.push({ service: r.service, seq: r.seq, type: r.type, decision: r.decision, reason: r.reason });
+  const alerts = [...securityAlerts(c.paths), ...clusterAlerts(c.cluster, 400)]
+    .filter((a) => !before.alerts.has(`${a.service}|${a.ts}|${a.rule}`))
+    .map((a) => ({ rule: a.rule, identity: a.identity, service: a.service, events: a.events, detail: a.detail }));
+  return { records: records.slice(-8), alerts: alerts.slice(-6) };
+}
+
+/** Plain-language node verdicts for captions written from real results. */
+const NODE_REASON                         = {
+  authorized: "allowed",
+  device_revoked: "refused: device revoked",
+  actor_revoked: "refused: identity revoked",
+  replayed_request: "refused: nonce already used",
+  wrong_node: "refused: signed for another node",
+  bad_signature: "refused: signature invalid",
+  stale_or_future_request: "refused: outside the ±30 s window",
+  unknown_device: "refused: device never enrolled",
+  key_version_retired: "refused: key version retired",
+};
+const verdict = (reason        ) => NODE_REASON[reason] ?? reason.replace(/_/g, " ");
 
             
               
@@ -119,7 +173,8 @@ function adapterStep(c     , req                         ) {
   const reply = c.call(req);
   let reason                = null;
   try {
-    reason = readAudit(c.paths).filter((r) => r.request_id === req.request_id).at(-1)?.reason ?? null;
+    // The decision record (an alert raised by the same request carries the same request_id).
+    reason = readAudit(c.paths).filter((r) => r.request_id === req.request_id && r.type !== "security_alert").at(-1)?.reason ?? null;
   } catch {
     reason = null;
   }
@@ -203,8 +258,23 @@ const LIVE              = [
         title: "The thief copies the phone's device key",
         caption: "The phone holds maya's ML-DSA-65 device key. The thief now has it and can sign requests exactly like maya's phone.",
         run: (c) => {
-          const d = device(c.cluster);
-          return { evidence: `device ${d.device_id}: private key copied (never shown)` };
+          // Re-runnable: if the current phone was already revoked by an earlier run, enrol a fresh one first.
+          let d = device(c.cluster);
+          let fresh = "";
+          if (control(c.cluster).policy.devices.find((x) => x.device_id === d.device_id)?.status !== "active") {
+            const cp = control(c.cluster);
+            const kp = generateSigningKeyPair();
+            const n = cp.policy.devices.filter((x) => x.owner === "maya").length + 1;
+            d = { device_id: `maya-phone-${n}`, privateKey: kp.privateKey.toString("base64"), publicKey: kp.publicKey.toString("base64") };
+            const epoch = cp.enrolDevice("maya", d.device_id, kp.publicKey);
+            atomicWriteFile(join(c.cluster, "demo-device.json"), JSON.stringify(d)); // synthetic demo key, temp dir only
+            waitForEpoch(c.cluster, epoch);
+            fresh = ` (maya's current phone, enrolled in policy epoch ${epoch})`;
+          }
+          return {
+            caption: `${d.device_id}${fresh} holds maya's ML-DSA-65 device key. The thief now has it and can sign requests exactly like maya's phone.`,
+            evidence: `device ${d.device_id}: private key copied (never shown)`,
+          };
         },
       },
       {
@@ -212,9 +282,16 @@ const LIVE              = [
         title: "maya reports the phone lost",
         caption: "The control plane revokes that one device, signs a new policy epoch with ML-DSA-65 and publishes it. Nodes pull it over HTTP and verify the signature before adopting it.",
         run: (c) => {
-          const epoch = control(c.cluster).revokeDevice(device(c.cluster).device_id);
+          const id = device(c.cluster).device_id;
+          const epoch = control(c.cluster).revokeDevice(id);
           const ms = waitForEpoch(c.cluster, epoch);
-          return { tone: "good", evidence: ms === null ? `epoch ${epoch} published; a node is offline or cut off` : `epoch ${epoch} published and enforced on all ${NODE_NAMES.length} nodes in ${ms} ms` };
+          return {
+            tone: ms === null ? "neutral" : "good",
+            caption: ms === null
+              ? `Policy epoch ${epoch} revokes ${id} and is signed with ML-DSA-65; a node is offline or cut off, so it keeps its last verified policy until it reconnects.`
+              : `Policy epoch ${epoch} revokes ${id}, signed with ML-DSA-65. All ${NODE_NAMES.length} nodes pulled it over HTTP, verified the signature and enforce it, ${ms} ms after publishing.`,
+            evidence: ms === null ? `epoch ${epoch} published; a node is offline or cut off` : `epoch ${epoch} published and enforced on all ${NODE_NAMES.length} nodes in ${ms} ms`,
+          };
         },
       },
       {
@@ -222,8 +299,14 @@ const LIVE              = [
         title: "The thief signs a request with the stolen key",
         caption: "The request is well-formed and signed with the real device key. It goes to node-a.",
         run: (c) => {
+          const id = device(c.cluster).device_id;
           const d = sendTo(c.cluster, "node-a", request(c.cluster, device(c.cluster), "node-a"), "stolen phone");
-          return { checks: nodeChecks(d.reason), tone: d.decision === "deny" ? "good" : "bad", evidence: `node-a: ${d.decision} (${d.reason}), policy epoch ${d.epoch}` };
+          return {
+            checks: nodeChecks(d.reason),
+            tone: d.decision === "deny" ? "good" : "bad",
+            caption: `A well-formed request, signed with ${id}'s real key, reaches node-a. node-a checks it against policy epoch ${d.epoch}: ${verdict(d.reason)}. The decision and an alert go into node-a's own signed log.`,
+            evidence: `node-a: ${d.decision} (${d.reason}), policy epoch ${d.epoch}`,
+          };
         },
       },
       {
@@ -233,7 +316,12 @@ const LIVE              = [
         run: (c) => {
           const out = NODE_NAMES.slice(1).map((n) => [n, sendTo(c.cluster, n, request(c.cluster, device(c.cluster), n), "stolen phone")]         );
           const all = out.every(([, d]) => d.decision === "deny");
-          return { tone: all ? "good" : "bad", checks: out.map(([n, d]) => ({ name: `${n}: device not revoked`, pass: d.decision === "allow" })), evidence: `${out.map(([n, d]) => `${n}: ${d.decision} (${d.reason})`).join(" · ")}. ${all ? "Blocked everywhere." : ""}` };
+          return {
+            tone: all ? "good" : "bad",
+            caption: `The thief signs fresh requests for ${out.map(([n]) => n).join(" and ")}. ${out.map(([n, d]) => `${n} (epoch ${d.epoch}): ${verdict(d.reason)}`).join("; ")}. ${all ? "Rejected on every node, each recording it in its own signed log." : ""}`,
+            checks: out.map(([n, d]) => ({ name: `${n}: device not revoked`, pass: d.decision === "allow" })),
+            evidence: `${out.map(([n, d]) => `${n}: ${d.decision} (${d.reason})`).join(" · ")}. ${all ? "Blocked everywhere." : ""}`,
+          };
         },
       },
     ],
@@ -270,7 +358,7 @@ const LIVE              = [
           const req = request(c.cluster, device(c.cluster), "node-b");
           c.set("captured", req);
           const d = sendTo(c.cluster, "node-b", req, "maya");
-          return { checks: nodeChecks(d.reason), tone: d.decision === "allow" ? "good" : "bad", evidence: `node-b: ${d.decision} (${d.reason}); nonce ${short(req.nonce, 8)}` };
+          return { checks: nodeChecks(d.reason), tone: d.decision === "allow" ? "good" : "bad", caption: `maya's ${req.device_id} signs a request addressed to node-b with nonce ${short(req.nonce, 8)} and the current time. node-b: ${verdict(d.reason)} (policy epoch ${d.epoch}).`, evidence: `node-b: ${d.decision} (${d.reason}); nonce ${short(req.nonce, 8)}` };
         },
       },
       {
@@ -279,7 +367,7 @@ const LIVE              = [
         caption: "They now hold an exact copy: valid signature, valid timestamp. They do not have the key.",
         run: (c) => {
           const r = c.get                     ("captured");
-          return { evidence: `captured: nonce ${short(r.nonce, 8)}, signature ${short(r.signature, 16)}` };
+          return { caption: `The attacker now holds an exact copy: nonce ${short(r.nonce, 8)}, ML-DSA signature ${short(r.signature, 12)}, addressed to ${r.node}, timestamp still inside the 30-second window. They do not have the key.`, evidence: `captured: nonce ${short(r.nonce, 8)}, signature ${short(r.signature, 16)}` };
         },
       },
       {
@@ -288,7 +376,7 @@ const LIVE              = [
         caption: "Same signature, still inside the 30-second window. Only the nonce gives it away.",
         run: (c) => {
           const d = sendTo(c.cluster, "node-b", c.get                     ("captured"), "replay");
-          return { checks: nodeChecks(d.reason), tone: d.decision === "deny" ? "good" : "bad", evidence: `node-b: ${d.decision} (${d.reason}). Nonces are stored on disk, so even a node restart would not reset them.` };
+          return { checks: nodeChecks(d.reason), tone: d.decision === "deny" ? "good" : "bad", caption: `The exact bytes go back to node-b. Signature and timestamp still check out, but nonce ${short(c.get                     ("captured").nonce, 8)} is already in node-b's replay store on disk. node-b: ${verdict(d.reason)}, and it raises a signed alert.`, evidence: `node-b: ${d.decision} (${d.reason}). Nonces are stored on disk, so even a node restart would not reset them.` };
         },
       },
       {
@@ -297,7 +385,7 @@ const LIVE              = [
         caption: "node-c has never seen this nonce. But the signed request names node-b as its audience, so node-c refuses it: rejected on one node means rejected on every node.",
         run: (c) => {
           const d = sendTo(c.cluster, "node-c", c.get                     ("captured"), "replay to node-c");
-          return { checks: nodeChecks(d.reason), tone: d.decision === "deny" ? "good" : "bad", evidence: `node-c: ${d.decision} (${d.reason}). The target node is inside the ML-DSA signature, so it cannot be changed.` };
+          return { checks: nodeChecks(d.reason), tone: d.decision === "deny" ? "good" : "bad", caption: `node-c has never seen nonce ${short(c.get                     ("captured").nonce, 8)}, but the signed request names ${c.get                     ("captured").node} as its target. node-c: ${verdict(d.reason)}. Rejected on one node means rejected on every node.`, evidence: `node-c: ${d.decision} (${d.reason}). The target node is inside the ML-DSA signature, so it cannot be changed.` };
         },
       },
     ],
@@ -319,7 +407,7 @@ const LIVE              = [
           const cp = control(c.cluster);
           const forged         = { ...cp.policy, epoch: cp.policy.epoch + 100, devices: cp.policy.devices.map((d) => ({ ...d, status: "active"         , revoked_at: null })), revoked_actors: [] };
           writeFileSync(join(c.run, "forged.json"), JSON.stringify(signPolicy(generateSigningKeyPair().privateKey, forged)));
-          return { evidence: `forged epoch ${forged.epoch}: ${forged.devices.length} devices active, signed with the attacker's key` };
+          return { caption: `The attacker copies policy epoch ${cp.policy.epoch}, marks all ${forged.devices.length} devices active (including revoked ones), jumps to epoch ${forged.epoch} and signs it with their own ML-DSA key.`, evidence: `forged epoch ${forged.epoch}: ${forged.devices.length} devices active, signed with the attacker's key` };
         },
       },
       {
@@ -330,14 +418,29 @@ const LIVE              = [
           const n = nodeView(c.cluster, "node-c");
           c.set("before", n.epoch);
           const r = n.adoptText(readFileSync(join(c.run, "forged.json"), "utf8"));
-          return { checks: [{ name: "Signature verifies against the control-plane anchor", pass: !(r.status === "rejected" && r.reason === "bad_signature") }], tone: r.status === "rejected" ? "good" : "bad", evidence: `node-c: ${r.status}${r.status === "rejected" ? ` (${r.reason})` : ""}` };
+          return {
+            checks: [{ name: "Signature verifies against the control-plane anchor", pass: !(r.status === "rejected" && r.reason === "bad_signature") }],
+            tone: r.status === "rejected" ? "good" : "bad",
+            caption: r.status === "rejected"
+              ? `node-c verifies the bytes against the control plane's ML-DSA anchor before anything else: ${r.reason === "bad_signature" ? "the signature does not match" : r.reason}. The forged policy is refused, logged in node-c's signed log and alerted.`
+              : `node-c ${r.status} the policy.`,
+            evidence: `node-c: ${r.status}${r.status === "rejected" ? ` (${r.reason})` : ""}`,
+          };
         },
       },
       {
         actor: "service",
         title: "Nothing changed",
         caption: "node-c keeps enforcing the last policy it verified, so revoked devices stay revoked.",
-        run: (c) => ({ tone: "good", evidence: `node-c still on epoch ${nodeView(c.cluster, "node-c").epoch} (was ${c.get        ("before")}); forged policy discarded` }),
+        run: (c) => {
+          const now = nodeView(c.cluster, "node-c").epoch;
+          const revoked = control(c.cluster).policy.devices.filter((d) => d.status !== "active").length;
+          return {
+            tone: now === c.get        ("before") ? "good" : "bad",
+            caption: `node-c is still on policy epoch ${now} (it was ${c.get        ("before")} before the attack), so ${revoked ? `all ${revoked} revoked device(s) stay revoked` : "nothing was re-enabled"}.`,
+            evidence: `node-c still on epoch ${now} (was ${c.get        ("before")}); forged policy discarded`,
+          };
+        },
       },
     ],
   },
@@ -371,7 +474,7 @@ const LIVE              = [
         caption: "The revocation is saved and signed into the audit log before the operator sees a confirmation.",
         run: (c) => {
           c.call({ op: "revoke", actor: "maya" });
-          return { tone: "good", evidence: `revocation recorded as audit #${lastSeq(c.paths)}` };
+          return { tone: "good", caption: `maya's laptop is reported lost. The revocation is saved atomically, bumping the state version, and signed into the audit log as #${lastSeq(c.paths)} before the operator sees a confirmation.`, evidence: `revocation recorded as audit #${lastSeq(c.paths)}` };
         },
       },
       {
@@ -386,7 +489,7 @@ const LIVE              = [
         caption: "Same identity, moments later.",
         run: (c) => {
           const { reply, reason } = adapterStep(c, { op: "read", actor: "maya", asset: "design-doc", request_id: rid() });
-          return { checks: adapterChecks(reply, reason), tone: reply.decision === "deny" ? "good" : "bad", evidence: decide(reply) };
+          return { checks: adapterChecks(reply, reason), tone: reply.decision === "deny" ? "good" : "bad", caption: `The lost laptop asks for design-doc as maya: ${reply.decision === "deny" ? `denied (${reason ?? "denied"}), and the service raises a signed "revoked identity used" alert` : "allowed"}.`, evidence: decide(reply) };
         },
       },
       {
@@ -404,7 +507,8 @@ const LIVE              = [
         caption: "The state's version no longer matches the signed log head, so the service refuses everything rather than trust the disk. Watch the monitor turn red.",
         run: (c) => {
           const { reply } = adapterStep(c, { op: "read", actor: "maya", asset: "design-doc", request_id: rid() });
-          return { checks: adapterChecks(reply, null), tone: reply.error === "integrity_failure" ? "alarm" : "bad", evidence: `${decide(reply)} (${integrityReason(c)}); signed alert raised` };
+          const why = integrityReason(c);
+          return { checks: adapterChecks(reply, null), tone: reply.error === "integrity_failure" ? "alarm" : "bad", caption: reply.error === "integrity_failure" ? `The service refuses the request and everything after it: ${why}. Rather than trust an old file, it fails closed and writes a signed alert to its side log. Watch the monitor turn red.` : `Unexpected: ${decide(reply)}.`, evidence: `${decide(reply)} (${why}); signed alert raised` };
         },
       },
       {
@@ -437,9 +541,11 @@ const LIVE              = [
         title: "omar tries to open maya's design-doc",
         caption: "He is denied, and the denial is signed into the log: exactly the evidence an insider wants gone.",
         run: (c) => {
-          const { reply, reason } = adapterStep(c, { op: "read", actor: "omar", asset: "design-doc", request_id: rid() });
-          c.set("evidence_seq", lastSeq(c.paths));
-          return { checks: adapterChecks(reply, reason), tone: "good", evidence: `${decide(reply)}; recorded as audit #${lastSeq(c.paths)}` };
+          const id = rid();
+          const { reply, reason } = adapterStep(c, { op: "read", actor: "omar", asset: "design-doc", request_id: id });
+          const seq = readAudit(c.paths).find((r) => r.request_id === id && r.type === "access_decision")?.seq ?? lastSeq(c.paths);
+          c.set("evidence_seq", seq);
+          return { checks: adapterChecks(reply, reason), tone: "good", caption: `omar is denied maya's design-doc, and the denial is signed into the log as audit #${seq}: exactly the evidence an insider wants gone.`, evidence: `${decide(reply)}; recorded as audit #${seq}` };
         },
       },
       {
@@ -457,10 +563,18 @@ const LIVE              = [
         title: "Cut the record and delete the signed head",
         caption: "The attacker removes the last log line and the head file that would expose the cut.",
         run: (c) => {
+          const target = c.get        ("evidence_seq");
           const lines = readFileSync(c.paths.audit, "utf8").trimEnd().split("\n");
-          writeFileSync(c.paths.audit, `${lines.slice(0, -1).join("\n")}\n`);
+          const kept = lines.filter((l) => {
+            try {
+              return (JSON.parse(l)                   ).seq !== target;
+            } catch {
+              return true;
+            }
+          });
+          writeFileSync(c.paths.audit, `${kept.join("\n")}\n`);
           rmSync(c.paths.auditHead, { force: true });
-          return { tone: "alarm", evidence: `audit #${c.get        ("evidence_seq")} removed; audit.head.json deleted` };
+          return { tone: "alarm", caption: `The attacker deletes audit #${target} (omar's denial) from the log file and removes audit.head.json, the signed pointer that would expose the cut.`, evidence: `audit #${target} removed; audit.head.json deleted` };
         },
       },
       {
@@ -518,9 +632,15 @@ const LIVE              = [
           title: `lee tries ${asset}`,
           caption: i < 2 ? "Denied: lee does not own it. The service counts denials per identity." : "Third different file within a minute: the service raises a signed security alert and quarantines lee.",
           run: (c) => {
-            const { reply, reason } = adapterStep(c, { op: "read", actor: "lee", asset, request_id: rid() });
-            const alerts = i === 2 ? [...new Set(securityAlerts(c.paths).filter((a) => a.actor === "lee").map((a) => a.rule))] : [];
-            return { checks: adapterChecks(reply, reason), tone: i === 2 ? "alarm" : "good", evidence: `${decide(reply)}${alerts.length ? `; alerts: ${alerts.join(", ")}` : ""}` };
+            const id = rid();
+            const { reply, reason } = adapterStep(c, { op: "read", actor: "lee", asset, request_id: id });
+            const recent = securityAlerts(c.paths).filter((a) => a.actor === "lee" && Date.now() - Date.parse(a.ts) < 60_000);
+            const alerts = [...new Set(recent.map((a) => a.rule))];
+            const probe = recent.find((a) => a.rule === "probing");
+            const caption = probe
+              ? `lee is denied ${asset} (${reason ?? "denied"}). That is ${probe.detail.match(/\d+/)?.[0] ?? "3"} different files denied within 60 s: a signed probing alert names lee, the file service and events ${probe.events}${alerts.includes("quarantined") ? ", and lee is quarantined" : ""}.`
+              : `lee is denied ${asset} (${reason ?? "denied"}): she does not own it. The service counts denials per identity (${i + 1} so far).`;
+            return { checks: adapterChecks(reply, reason), tone: probe ? "alarm" : "good", caption, evidence: `${decide(reply)}${alerts.length ? `; alerts: ${alerts.join(", ")}` : ""}` };
           },
         }),
       ),
@@ -598,7 +718,7 @@ const LIVE              = [
         caption: "The service authorizes BEFORE encapsulating anything.",
         run: (c) => {
           const { reply, reason } = adapterStep(c, { op: "protected_read", actor: "mallory", asset: "payroll.xlsx", challenge: randomBytes(16).toString("hex"), public_key: c.get        ("mallory_pub"), request_id: rid() });
-          return { checks: [...adapterChecks(reply, reason), { name: "No ciphertext or proof returned", pass: !reply.ciphertext && !reply.proof }], tone: reply.decision === "deny" ? "good" : "bad", evidence: decide(reply) };
+          return { checks: [...adapterChecks(reply, reason), { name: "No ciphertext or proof returned", pass: !reply.ciphertext && !reply.proof }], tone: reply.decision === "deny" ? "good" : "bad", caption: reply.decision === "deny" ? `The service checks ownership first: mallory is denied payroll.xlsx (${reason ?? "denied"}). Nothing is encapsulated to her key, so there is no ciphertext and no proof, and a signed "encrypted copy refused" alert names her.` : "Unexpected: allowed.", evidence: decide(reply) };
         },
       },
       {
@@ -662,7 +782,7 @@ export function labCatalog() {
 
 // ---------- run lifecycle ----------
 
-                                                                                                                                                                              
+                                                                                                                                                                                                   
 const RUN_ID = /^[0-9]+-[0-9a-f]{6}$/;
 
 function context(run         , dir        )      {
@@ -679,13 +799,47 @@ function context(run         , dir        )      {
   };
 }
 
+/**
+ * What the Live Monitor mirrors: the latest step with its REAL outcome (evidence, checks, the signed
+ * records it produced and the alerts it raised) plus the run's events, so the monitor can animate it.
+ */
 function save(run         , dir        , summary        ) {
   atomicWriteFile(join(dir, "run.json"), JSON.stringify(run));
   const last = run.events.at(-1);
+  const base = { run_id: run.id, attack: run.attack, name: run.name, total: run.total, live: attack(run.attack)?.live ?? true, events: run.events };
   const current = last
-    ? { run_id: run.id, attack: run.attack, name: run.name, step: last.step, total: run.total, title: last.title, caption: last.caption, tone: last.tone, at: last.at, done: run.done }
-    : { run_id: run.id, attack: run.attack, name: run.name, step: 0, total: run.total, title: "Ready", caption: summary, tone: "neutral", at: run.started_at, done: false };
+    ? { ...base, state: run.done ? "finished" : "running", step: last.step, actor: last.actor, title: last.title, caption: last.caption, evidence: last.evidence, checks: last.checks, tone: last.tone, audit_seq: last.audit_seq, records: last.records, alerts: last.alerts, at: last.at, done: run.done }
+    : { ...base, state: "ready", step: 0, actor: null, title: "Ready", caption: summary, evidence: "", checks: [], tone: "neutral", audit_seq: null, records: [], alerts: [], at: run.started_at, done: false };
   atomicWriteFile(join(labDir(), "current.json"), JSON.stringify(current));
+}
+
+/** The Lab is between attacks (another attack selected, or "Run again"): the monitor shows no stale step. */
+export function labIdle() {
+  mkdirSync(labDir(), { recursive: true, mode: 0o700 });
+  atomicWriteFile(join(labDir(), "current.json"), JSON.stringify({ state: "idle", at: Date.now() }));
+  return { idle: true };
+}
+
+/** After a demo reset, unfinished runs must not be resumed against the reset service. */
+export function labAbandon() {
+  let abandoned = 0;
+  if (existsSync(labDir())) {
+    for (const d of readdirSync(labDir())) {
+      if (!RUN_ID.test(d) || !existsSync(join(labDir(), d, "run.json"))) continue;
+      try {
+        const run = JSON.parse(readFileSync(join(labDir(), d, "run.json"), "utf8"))           ;
+        if (run.done) continue;
+        run.done = true;
+        run.abandoned = true;
+        atomicWriteFile(join(labDir(), d, "run.json"), JSON.stringify(run));
+        abandoned++;
+      } catch {
+        // unreadable run: ignore
+      }
+    }
+  }
+  labIdle();
+  return { abandoned };
 }
 
 export function labStart(id        ) {
@@ -712,15 +866,29 @@ export function labStep(runId        ) {
   if (!a || run.done) return { error: "run_finished" };
   const def = a.steps[run.next];
   const c = context(run, dir);
-  const before = lastSeq(c.paths);
+  const before = evidenceKeys(c);
   let r            ;
   try {
     r = def.run(c);
   } catch (err) {
     r = { tone: "bad", evidence: `step failed: ${err instanceof Error ? err.message : "error"}` };
   }
-  const after = lastSeq(c.paths);
-  const ev           = { step: run.next + 1, actor: def.actor, title: def.title, caption: r.caption ?? def.caption, checks: r.checks ?? [], evidence: r.evidence ?? "", tone: r.tone ?? "neutral", audit_seq: after !== null && after !== before ? after : null, at: Date.now() };
+  // Read back what the step really produced from the signed logs (service + every node).
+  const produced = producedSince(c, before);
+  const decisionRec = produced.records.find((x) => x.service === SERVICE_NAME && x.type !== "security_alert") ?? produced.records.find((x) => x.service === SERVICE_NAME);
+  const ev           = {
+    step: run.next + 1,
+    actor: def.actor,
+    title: r.title ?? def.title,
+    caption: r.caption ?? def.caption,
+    checks: r.checks ?? [],
+    evidence: r.evidence ?? "",
+    tone: r.tone ?? "neutral",
+    audit_seq: decisionRec?.seq ?? null,
+    at: Date.now(),
+    records: produced.records,
+    alerts: produced.alerts,
+  };
   run.events.push(ev);
   run.next += 1;
   run.done = run.next >= a.steps.length;
