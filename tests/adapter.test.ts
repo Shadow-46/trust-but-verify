@@ -120,7 +120,9 @@ test("corrupted asset ciphertext (valid state MAC) is denied by AES-GCM and reco
   const r = call(dir, { op: "read", actor: "maya", asset: "brief", request_id: "t2" });
   assert.deepEqual(r.out, { decision: "deny" });
   assert.deepEqual(call(dir, { op: "audit", request_id: "t2" }).out, { request_id: "t2", decision: "deny" });
-  assert.equal(readAudit(paths).at(-1)?.reason, "integrity_failure");
+  const records = readAudit(paths);
+  assert.equal(records.find((r) => r.request_id === "t2")?.reason, "integrity_failure");
+  assert.ok(records.some((r) => r.type === "security_alert" && r.reason?.startsWith("data_integrity")), "a security alert is raised");
 });
 
 test("IDs are opaque: __proto__/constructor and newline/JSON injection are handled safely", () => {
