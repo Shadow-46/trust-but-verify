@@ -15,7 +15,7 @@ type Section = "overview" | "files" | "users" | "audit" | "keys" | "nodes" | "al
 
 const USERS = ["maya", "omar", "dana", "mallory"];
 const BECAUSE: Record<string, string> = {
-  owner: "the identity owns it and its device is trusted",
+  owner: "the identity owns it and has not been revoked or disabled",
   not_owner: "the identity does not own this file",
   revoked: "the identity was revoked after its device was reported lost",
   disabled: "the account is disabled",
@@ -24,7 +24,7 @@ const BECAUSE: Record<string, string> = {
   request_id_reused: "the request ID was already used",
 };
 const SHORT: Record<string, string> = {
-  owner: "Owner, trusted device",
+  owner: "Owner, not revoked",
   not_owner: "Not the owner",
   revoked: "Revoked, device lost",
   disabled: "Account disabled",
@@ -143,7 +143,7 @@ export default function Console() {
     const readMaya = () => api("read", { actor: "maya", asset: "design-doc" });
     return [
       { title: "Reset the demo", expect: "Fresh files, keys and signed log", run: async () => { const r = await api("reset"); return { pass: r.out?.ready === true, actual: r.out?.ready ? "Demo files ready" : "Setup failed" }; } },
-      { title: "maya opens design-doc", expect: "Allowed: maya owns it on a trusted device", run: async () => { const r = await readMaya(); return { pass: r.out?.decision === "allow", actual: decisionText(r) }; } },
+      { title: "maya opens design-doc", expect: "Allowed: maya owns it and is not revoked", run: async () => { const r = await readMaya(); return { pass: r.out?.decision === "allow", actual: decisionText(r) }; } },
       { title: "An attacker copies the state file", expect: "Copy saved (simulated disk access)", run: async () => { const r = await api("snapshot"); return { pass: r.ok, actual: r.ok ? "Copy saved" : "Could not copy" }; } },
       { title: "maya reports the laptop lost", expect: "maya's access is revoked everywhere", run: async () => { const r = await api("revoke", { actor: "maya" }); return { pass: r.ok, actual: r.ok ? "Revocation recorded and signed" : "Revocation failed" }; } },
       { title: "The lost laptop tries design-doc", expect: "Denied: identity revoked after device loss", run: async () => { const r = await readMaya(); return { pass: r.out?.decision === "deny", actual: decisionText(r) }; } },
