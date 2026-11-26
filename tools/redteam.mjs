@@ -278,7 +278,9 @@ tamperCase("TAMPER-log-corrupt-line", "a corrupted audit line fails closed with 
   const sig = JSON.parse(last).sig;
   check("TAMPER-audit-key-deleted", r.json?.error === "integrity_failure" || (sig && sig.length > 0), "deleting keys/audit.key does not silently produce unsigned records", `read→${r.stdout.trim().slice(0, 40)} last sig length=${sig?.length ?? 0}`);
   const v = spawnSync(process.execPath, [join(ROOT, "dist/core/ops.js"), "verify-log"], { env: { ...process.env, TRACK4_STATE_DIR: d } });
-  check("TAMPER-audit-key-deleted-verify", v.stdout.toString().includes('"ok":false'), "verify-log reports the unsigned record", v.stdout.toString().trim().slice(0, 90));
+  // Either no record was written (the service failed closed: verify ok, nothing unsigned) or verify-log flags it.
+  const vOut = v.stdout.toString();
+  check("TAMPER-audit-key-deleted-verify", r.json?.error === "integrity_failure" ? vOut.includes('"ok":true') : vOut.includes('"ok":false'), "no unsigned record is ever accepted by verify-log", vOut.trim().slice(0, 90));
 }
 tamperCase("TAMPER-master-swap", "replacing keys/master.key fails closed", (d) => {
   writeFileSync(join(d, "keys", "master.key"), Buffer.alloc(32, 7).toString("base64"));
