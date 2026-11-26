@@ -15,6 +15,7 @@ import { join, resolve } from "node:path";
 const ROOT = resolve(process.cwd(), "..");
 const STATE = join(tmpdir(), "tbv-dashboard");
 const SNAPSHOT = join(tmpdir(), "tbv-dashboard-snapshot.json");
+const WITNESS = join(tmpdir(), "tbv-dashboard-witness");
 const ID = /^[A-Za-z0-9._-]{1,64}$/;
 
 const DEMO = {
@@ -30,11 +31,13 @@ const DEMO = {
 
 function run(args: string[], input?: unknown) {
   mkdirSync(STATE, { recursive: true });
+  mkdirSync(WITNESS, { recursive: true });
   const started = performance.now();
   const r = spawnSync(process.execPath, args, {
     cwd: ROOT,
     input: input === undefined ? undefined : JSON.stringify(input),
-    env: { ...process.env, TRACK4_STATE_DIR: STATE },
+    // The demo runs with the external witness and auto-quarantine enabled.
+    env: { ...process.env, TRACK4_STATE_DIR: STATE, TRACK4_WITNESS_DIR: WITNESS, TRACK4_AUTO_QUARANTINE: "1" },
     encoding: "utf8",
     timeout: 20_000,
   });
@@ -91,6 +94,12 @@ export async function POST(request: Request) {
         // Simulated attacker with disk access restores an older, validly authenticated state file.
         copyFileSync(SNAPSHOT, join(STATE, "state.json"));
         return Response.json({ ok: true, out: { rolled_back: true } });
+      case "attacks":
+        return Response.json(ops("attacks"));
+      case "attack":
+        return Response.json(ops("attack", body.id === "all" ? "all" : str("id")));
+      case "alerts":
+        return Response.json(ops("alerts"));
       case "detect":
         return Response.json(ops("detect-sample", String(Number(body.seed ?? 1) || 1)));
       case "evidence":
