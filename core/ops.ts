@@ -9,6 +9,7 @@ import { securityAlerts } from "./defense/guard.ts";
 import { listAttacks, runAttack } from "./demo/attacks.ts";
 import { messagingDemo } from "./demo/messagingDemo.ts";
 import { netClusterBench, netMessagingDemo } from "./demo/network.ts";
+import { labCatalog, labRuns, labStart, labStep } from "./demo/liveLab.ts";
 import { clusterEnrol, clusterInit, clusterRevoke, clusterStatus } from "./demo/liveCluster.ts";
 import { createBackup, restoreBackup } from "./backup.ts";
 import { rotateStoredDataKey } from "./keys/rotation.ts";
@@ -94,6 +95,16 @@ export function runOps(argv: string[]): { code: number; out: unknown } {
     }
     case "alerts":
       return { code: 0, out: securityAlerts(paths) };
+    case "lab-catalog":
+      return { code: 0, out: labCatalog() };
+    case "lab-start":
+      if (!arg) break;
+      return { code: 0, out: labStart(arg) };
+    case "lab-step":
+      if (!arg) break;
+      return { code: 0, out: labStep(arg) };
+    case "lab-runs":
+      return { code: 0, out: labRuns() };
     case "monitor": {
       // One read-only snapshot for the Live Monitor (each part fails independently, never secrets).
       const part = <T>(fn: () => T) => {
