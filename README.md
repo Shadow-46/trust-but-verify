@@ -7,7 +7,7 @@ when an identity gains unexpected privileges or moves between services.
 Built for Yugaantar DevForge 2026, Track 4.
 
 > Work in progress: the protected-resource service, key rotation and multi-node revocation are
-> complete; crash recovery, backups, signed logs, messaging and the detector are being added.
+> complete; crash recovery, backups and signed logs are complete; messaging and the detector are being added.
 
 ## Clean-machine setup
 Requirements: **Node.js 24.11.1 or newer**. Nothing else — the service uses only
@@ -16,7 +16,7 @@ Node built-ins, so there is no `npm install` for the core.
 ```sh
 git clone https://github.com/Shadow-46/trust-but-verify.git
 cd trust-but-verify
-npm test                     # 26 tests (one is Linux-only and skipped on Windows)
+npm test                     # 34 tests (one is Linux-only and skipped on Windows)
 ```
 
 Run one request (the judging worker does exactly this, one process per request):
@@ -86,9 +86,30 @@ status, identity revocation, signature, timestamp (±30 s) and nonce (replay), t
 npm run demo:cluster        # runs the scenario and rewrites evidence/t6-cluster.json
 ```
 
+## Crash recovery, backups and log integrity (goals 3–5)
+- **Crash recovery:** every multi-step change (setup, revoke, rotation, restore) ends in one atomic
+  replace of the authenticated state file, so a crash leaves the complete old or the complete new
+  state. Tested by killing the process just before and just after a rotation commits: reads
+  succeed on a consistent key version, revoked identities stay revoked, and the dead process's
+  lock is broken by PID check within milliseconds.
+- **Rollback/truncation detection:** the state records a version counter and the audit-log head it
+  was saved against; every audit record carries the state version it saw; a signed `audit.head.json`
+  tracks the newest record. Restoring an older `state.json` (e.g. to undo a revocation) or cutting
+  records off the log makes every request fail closed with `integrity_failure`.
+- **Signed key-event log:** each record (setup, decision, revocation, rotation, restore) is
+  hash-chained and signed with ML-DSA-65; user text is always a JSON field value, so it cannot
+  create a fake record or change the recorded actor. Operators verify with `npm run ops -- verify-log`
+  (only `keys/audit.pub` is needed to verify an exported log).
+- **Backups:** `npm run ops -- backup <file>` writes state + log with a SHA-256 digest and ML-DSA
+  signature (never the master key). `restore` verifies digest, signature and the state MAC before
+  touching live data and reports `digest_mismatch`, `bad_signature` or `state_invalid`. Revocations
+  made after the backup are carried into the restored state, so a restore never re-enables anyone.
+- **Control plane:** refuses to load a published policy older than its private epoch high-water mark.
+
 ## Performance
 One request = one Node process. Measured in Docker `node:24.11.1` on a native filesystem:
-about **26 ms per `read` including process start** (bare `node` start-up is ~12 ms). The
+about **37 ms per `read` including process start** (bare `node` start-up is ~12 ms; ~11 ms of
+that is the ML-DSA signature on the audit record and the signed log head). The
 TypeScript in `core/` is shipped pre-stripped in `dist/` (`npm run build`), which halves start-up
 compared with stripping types at runtime.
 
@@ -96,12 +117,9 @@ compared with stripping types at runtime.
 - The master key lives on the same host as the data unless `TRACK4_MASTER_KEY` is supplied by an
   external KMS; an attacker with full host access and the key file can decrypt.
 - `setup` is a trusted operator operation and resets all state.
-- The audit chain detects edited or reordered records, but not a truncated tail, and a host
-  attacker could rebuild an unsigned chain. Planned: ML-DSA-signed records with the chain head
-  stored inside the authenticated state.
-- The state HMAC detects edits but not **rollback** to an older, validly authenticated
-  `state.json` (which could undo a revocation). Planned: a monotonic version counter bound to the
-  audit chain head.
+- Rolling back **both** the state and the log (and head) together to an older consistent copy is
+  not detectable on the host alone; it needs an external anchor (e.g. shipping signed log heads to a
+  separate witness). The audit signing key lives on the same host as the log.
 - A reused `request_id` is only honoured as an identical retry of an earlier allow; any other reuse
   is denied without content.
 - Cluster demo: node processes sync policy over a shared filesystem (no network listener); requests
