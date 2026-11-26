@@ -7,7 +7,7 @@ when an identity gains unexpected privileges or moves between services.
 Built for Yugaantar DevForge 2026, Track 4.
 
 > Work in progress: the protected-resource service, key rotation and multi-node revocation are
-> complete; crash recovery, backups and signed logs are complete; messaging and the detector are being added.
+> complete; crash recovery, backups, signed logs, messaging and the detector are complete; detector metrics and the operator dashboard are being added.
 
 ## Clean-machine setup
 Requirements: **Node.js 24.11.1 or newer**. Nothing else — the service uses only
@@ -16,7 +16,7 @@ Node built-ins, so there is no `npm install` for the core.
 ```sh
 git clone https://github.com/Shadow-46/trust-but-verify.git
 cd trust-but-verify
-npm test                     # 34 tests (one is Linux-only and skipped on Windows)
+npm test                     # 59 tests (one is Linux-only and skipped on Windows)
 ```
 
 Run one request (the judging worker does exactly this, one process per request):
@@ -106,6 +106,25 @@ npm run demo:cluster        # runs the scenario and rewrites evidence/t6-cluster
   made after the backup are carried into the restored state, so a restore never re-enables anyone.
 - **Control plane:** refuses to load a published policy older than its private epoch high-water mark.
 
+## End-to-end messaging (goals 9–12)
+`core/messaging/protocol.ts`. Identities are ML-DSA-65 keys from the trusted directory (control-plane policy).
+- **Handshake:** each side uses fresh ephemeral **X25519 + ML-KEM-768** keys; session keys =
+  HKDF-SHA-256(X25519 secret ‖ ML-KEM secret, salt = transcript hash). Secure unless *both* exchanges
+  are broken (hybrid). Both parties sign the full transcript with their identity key, so substituting
+  any ephemeral key is detected.
+- **Recipient binding & replay:** every chunk is AES-256-GCM with associated data (session, sender,
+  recipient, message ID, sequence, chunk index/total) rebuilt from the receiver's own view, so a
+  re-addressed or altered chunk fails authentication; a delivered message ID is never delivered again.
+- **Forward secrecy:** identity keys only sign; ephemeral private keys live only inside the handshake
+  and session keys are zeroed on `close()`. Tested: with both stolen identity keys and the recorded
+  transcript, an attacker can only create a new session with unrelated keys and cannot decrypt.
+- **Loss / reordering:** chunks may arrive in any order; a message is delivered only when all chunks
+  authenticate. A tampered chunk discards the whole message, and messages still incomplete after 30 s
+  are discarded; both are reported as delivery failures.
+- **Session resumption (supported):** a resume request must be signed by the same identity key the
+  session was established with; a different identity, a re-keyed identity, a replayed request, or an
+  identity the current policy no longer authorizes is refused. Each resumption derives fresh keys.
+
 ## Performance
 One request = one Node process. Measured in Docker `node:24.11.1` on a native filesystem:
 about **37 ms per `read` including process start** (bare `node` start-up is ~12 ms; ~11 ms of
@@ -126,6 +145,8 @@ compared with stripping types at runtime.
   are authorized against each node's own stored, re-verified policy. Replay nonces and the in-flight
   transfer table are in memory and are lost when a node restarts.
 - A brand-new node accepts any genuinely signed policy as its first one (no freshness bound yet).
+- Messaging is a library with tests (no network transport); a resumed session reuses the original
+  session secret chain, so its forward secrecy relies on the resume secret being erased on close.
 - The judged adapter identifies actors by ID only; per-device signatures exist in the cluster layer.
 - A request killed while holding the state lock is detected by PID and its lock is broken
   immediately; a live but hung holder is broken after 3 s.
