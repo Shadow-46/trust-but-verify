@@ -61,7 +61,9 @@ function save(paths: StatePaths, d: Defense, now: number): void {
 /** The parseable alert text. Request IDs are caller data: JSON-escaped where needed, never on stderr. */
 function alertText(rule: string, identity: string, events: string[], seq: number | null, detail: string): string {
   const ids = events.map((e) => (/^[\w.:-]+$/.test(e) ? e : JSON.stringify(e))).join(",");
-  return `${rule}: identity=${identity} service=${SERVICE} events=${ids || "-"}${seq !== null ? ` seq=${seq}` : ""} — ${detail}`;
+  // Odd identities (newlines, quotes…) are JSON-escaped so the alert stays one parseable line.
+  const who = identity === UNAUTHENTICATED || /^[\w.@:-]+$/.test(identity) ? identity : JSON.stringify(identity);
+  return `${rule}: identity=${who} service=${SERVICE} events=${ids || "-"}${seq !== null ? ` seq=${seq}` : ""} — ${detail}`;
 }
 
 /** The decision record that triggered the alert(s), read lazily (only when an alert fires). */
@@ -90,7 +92,20 @@ export function isQuarantined(paths: StatePaths, actor: string): boolean {
 }
 
 /** Call inside the state lock after every access decision (after it is in the audit log). */
-export function observeDecision(paths: StatePaths, actor: string, asset: string, decision: "allow" | "deny", reason: string, requestId = "", now = Date.now()): void {
+/**
+ * IDs built to break parsers, logs or file paths: control characters (newline, NUL…), JavaScript
+ * prototype keys, or path traversal. They are harmless here (IDs are opaque Map keys and JSON field
+ * values, never paths), but sending them is an attack attempt worth reporting.
+ */
+export function suspiciousIdentifier(id: string): string | null {
+  // eslint-disable-next-line no-control-regex
+  if (/[\u0000-\u001f\u007f]/.test(id)) return "control characters (log or record injection attempt)";
+  if (id === "__proto__" || id === "constructor" || id === "prototype") return "a JavaScript prototype key (prototype pollution attempt)";
+  if (/(^|[\\/])\.\.([\\/]|$)/.test(id) || id.startsWith("/") || /^[a-zA-Z]:[\\/]/.test(id)) return "a file path (path traversal attempt)";
+  return null;
+}
+
+export function observeDecision(paths: StatePaths, actor: string, asset: string, decision: "allow" | "deny", reason: string, requestId = "", now = Date.now(), op: "read" | "protected_read" = "read"): void {
   const d = load(paths);
   const minute = Math.floor(now / WINDOW_MS);
   let decisionRecord: AuditRecord | undefined | null = null;
@@ -114,6 +129,14 @@ export function observeDecision(paths: StatePaths, actor: string, asset: string,
     alert(paths, d, trigger, `reuse:${actor}:${minute}`, "request_id_reuse", actor, asset, [requestId], "a used request ID was presented again (possible replay)");
   } else if (reason === "integrity_failure") {
     alert(paths, d, trigger, `integrity:${asset}:${minute}`, "data_integrity", actor, asset, [requestId], "stored ciphertext failed authentication; access refused");
+  }
+  const weird = suspiciousIdentifier(actor) ?? suspiciousIdentifier(asset);
+  if (weird) {
+    const which = suspiciousIdentifier(actor) ? "identity" : "file name";
+    alert(paths, d, trigger, `suspicious-id:${actor}:${minute}`, "suspicious_identifier", actor, asset, [requestId], `the ${which} contains ${weird}; treated as plain data and ${decision === "deny" ? "denied" : "allowed"}`);
+  }
+  if (op === "protected_read" && decision === "deny" && (reason === "not_owner" || reason === "unknown_asset")) {
+    alert(paths, d, trigger, `kem-refused:${actor}:${minute}`, "encrypted_copy_refused", actor, asset, [requestId], "an encrypted copy (ML-KEM-768) of a file this identity does not own was requested; refused before any encapsulation");
   }
   save(paths, d, now);
 }

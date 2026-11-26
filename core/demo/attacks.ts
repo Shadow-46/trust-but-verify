@@ -106,7 +106,7 @@ const ATTACKS: Attack[] = [
   },
   {
     id: "log-injection", name: "Inject a fake log record", attack: "Send an actor name containing a newline and a forged JSON record.", defense: "Every value is a JSON field; record boundaries cannot be forged.",
-    run: () => { const { paths, call } = instance(); const evil = 'mallory\n{"type":"revoke","actor":"omar"}'; call({ op: "read", actor: evil, asset: "design-doc", request_id: "i" }); const recs = readAudit(paths).filter((r) => r.request_id === "i"); return { blocked: recs.length === 1 && recs[0].actor === evil && !readAudit(paths).some((r) => r.type === "revoke"), evidence: "1 record written, actor preserved verbatim, no fake revoke" }; },
+    run: () => { const { paths, call } = instance(); const evil = 'mallory\n{"type":"revoke","actor":"omar"}'; call({ op: "read", actor: evil, asset: "design-doc", request_id: "i" }); const all = readAudit(paths); const recs = all.filter((r) => r.request_id === "i" && r.type !== "security_alert"); const alerted = all.some((r) => r.type === "security_alert" && r.reason?.startsWith("suspicious_identifier")); return { blocked: recs.length === 1 && recs[0].actor === evil && !all.some((r) => r.type === "revoke") && alerted, evidence: "1 decision record written, actor preserved verbatim, no fake revoke; alert: suspicious_identifier" }; },
   },
   {
     id: "weird-ids", name: "Prototype pollution and path traversal", attack: "Use __proto__ and ../../etc/passwd as identities and file names.", defense: "IDs are opaque Map keys, never object keys or file paths.",

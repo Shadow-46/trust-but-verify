@@ -86,6 +86,7 @@ function authorizeAndRecord(
   actor        ,
   asset        ,
   requestId        ,
+  op                            = "read",
 )                                        {
   const records = readAudit(paths);
   const first = findDecision(records, requestId);
@@ -119,7 +120,7 @@ function authorizeAndRecord(
     },
     records,
   );
-  observeDecision(paths, actor, asset, decision.decision, decision.reason, requestId);
+  observeDecision(paths, actor, asset, decision.decision, decision.reason, requestId, Date.now(), op);
   return decision.decision === "allow" ? { decision, body } : { decision };
 }
 
@@ -237,7 +238,7 @@ function opProtectedRead(req                         , paths            )       
       : `pr-${randomBytes(12).toString("hex")}`;
 
   return withLock(paths.root, () => {
-    const result = authorizeAndRecord(paths, openContext(paths), actor, asset, requestId);
+    const result = authorizeAndRecord(paths, openContext(paths), actor, asset, requestId, "protected_read");
     if (result.decision.decision !== "allow" || result.body === undefined) return { decision: "deny" };
     const { ciphertext, sharedKey } = encapsulate(publicKey);
     try {

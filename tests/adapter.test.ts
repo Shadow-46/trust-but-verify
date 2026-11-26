@@ -140,9 +140,12 @@ test("IDs are opaque: __proto__/constructor and newline/JSON injection are handl
     decision: "allow",
     body: "path body",
   });
-  const records = readAudit(statePaths(dir));
+  const all = readAudit(statePaths(dir));
+  // The injection attempt is reported as a separate signed security_alert; it never forges a decision record.
+  const records = all.filter((r) => r.type !== "security_alert");
   assert.equal(records.length, 3, "injected text must not create extra audit records");
   assert.equal(records[2].actor, evil, "recorded actor must be preserved exactly");
+  assert.ok(all.some((r) => r.type === "security_alert" && r.reason?.startsWith("suspicious_identifier")), "the attempt is alerted");
   assert.equal(verifyAudit(statePaths(dir)).ok, true);
 });
 

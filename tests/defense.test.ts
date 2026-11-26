@@ -104,3 +104,34 @@ test("alerts raised by one decision all point at that decision's audit seq", () 
   assert.equal(alerts.length, 2);
   assert.equal(alerts[0].events, alerts[1].events, "probing and quarantine share the triggering decision");
 });
+
+test("injection-shaped identifiers and refused encrypted copies raise alerts naming identity, service and event", async () => {
+  const { generateKeyPairSync } = await import("node:crypto");
+  const dir = freshStateDir();
+  callEnv(dir, SETUP);
+  const evil = 'mallory\n{"type":"revoke","actor":"omar"}';
+  assert.deepEqual(callEnv(dir, { op: "read", actor: evil, asset: "brief", request_id: "inj1" }), { decision: "deny" });
+  callEnv(dir, { op: "read", actor: "__proto__", asset: "../../etc/passwd", request_id: "inj2" });
+  const pub = generateKeyPairSync("ml-kem-768" as never).publicKey.export({ format: "der", type: "spki" }).subarray(22).toString("base64");
+  assert.deepEqual(callEnv(dir, { op: "protected_read", actor: "mallory", asset: "ledger", challenge: "c", public_key: pub, request_id: "kem1" }), { decision: "deny" });
+
+  const alerts = securityAlerts(statePaths(dir));
+  const susp = alerts.filter((a) => a.rule === "suspicious_identifier");
+  assert.equal(susp.length, 2);
+  assert.equal(susp[0].identity, evil, "raw identity kept as data");
+  assert.match(susp[0].detail, /control characters/);
+  assert.match(susp[1].detail, /prototype key|file path/);
+  const kem = alerts.find((a) => a.rule === "encrypted_copy_refused")!;
+  assert.equal(kem.identity, "mallory");
+  assert.equal(kem.service, "file-service adapter");
+  assert.match(kem.events, /^kem1 \(audit seq \d+\)$/);
+  // A normal, legitimate read raises nothing new.
+  callEnv(dir, { op: "read", actor: "maya", asset: "brief", request_id: "ok1" });
+  assert.equal(securityAlerts(statePaths(dir)).length, alerts.length);
+});
+
+test("suspiciousIdentifier only flags parser-breaking shapes", async () => {
+  const { suspiciousIdentifier } = await import("../core/defense/guard.ts");
+  for (const ok of ["maya", "design-doc", "payroll.xlsx", "user-002", "a.b@c", "r-1f2e"]) assert.equal(suspiciousIdentifier(ok), null, ok);
+  for (const bad of ["a\nb", "x\u0000", "__proto__", "constructor", "../../etc/passwd", "..\\win.ini", "/etc/passwd", "C:\\boot.ini"]) assert.ok(suspiciousIdentifier(bad), bad);
+});

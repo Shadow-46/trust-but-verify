@@ -552,9 +552,11 @@ const LIVE              = [
           const evil = 'mallory\n{"type":"revoke","actor":"omar"}';
           const before = lastSeq(c.paths) ?? 0;
           const { reply } = adapterStep(c, { op: "read", actor: evil, asset: "design-doc", request_id: rid() });
-          const recs = readAudit(c.paths).filter((r) => r.seq > before);
+          const fresh = readAudit(c.paths).filter((r) => r.seq > before);
+          const recs = fresh.filter((r) => r.type !== "security_alert");
+          const alerted = fresh.some((r) => r.type === "security_alert" && r.reason?.startsWith("suspicious_identifier"));
           return {
-            checks: [{ name: "Exactly one record written", pass: recs.length === 1 }, { name: "Actor kept inside one escaped JSON field", pass: recs[0]?.actor === evil }, { name: "No forged revoke record", pass: !recs.some((r) => r.type === "revoke") }],
+            checks: [{ name: "Exactly one decision record written", pass: recs.length === 1 }, { name: "Actor kept inside one escaped JSON field", pass: recs[0]?.actor === evil }, { name: "No forged revoke record", pass: !recs.some((r) => r.type === "revoke") }, { name: "Signed alert: suspicious identifier", pass: alerted }],
             tone: "good",
             evidence: `${decide(reply)}; audit #${recs[0]?.seq} actor = ${JSON.stringify(recs[0]?.actor ?? "")}`,
           };
