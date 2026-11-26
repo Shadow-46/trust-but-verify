@@ -12,7 +12,7 @@ import type { StatePaths } from "../store/paths.ts";
  * verification from that point on.
  */
 
-export type AuditType = "setup" | "access_decision" | "duplicate_request_id" | "revoke";
+export type AuditType = "setup" | "access_decision" | "duplicate_request_id" | "revoke" | "key_rotation";
 
 export type AuditFields = {
   type: AuditType;

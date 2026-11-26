@@ -1,22 +1,16 @@
 import { createHmac, randomBytes } from "node:crypto";
 import { rmSync } from "node:fs";
-import { aad, open as openSealed, seal } from "./crypto/aead.ts";
+import { seal } from "./crypto/aead.ts";
 import { decodeBase64Strict } from "./crypto/encoding.ts";
 import { encapsulate, importMlKem768PublicKey } from "./crypto/kem.ts";
-import {
-  createMasterKey,
-  deriveKeys,
-  loadMasterKey,
-  newDataKey,
-  unwrapDataKey,
-  wrapDataKey,
-} from "./keys/keystore.ts";
-import type { DerivedKeys } from "./keys/keystore.ts";
+import { createMasterKey, deriveKeys, newDataKey, wrapDataKey } from "./keys/keystore.ts";
 import { decide } from "./access/policy.ts";
 import type { Decision } from "./access/policy.ts";
 import { appendAudit, findDecision, readAudit } from "./audit/log.ts";
-import { loadState, readSalt, saveState } from "./state.ts";
+import { saveState } from "./state.ts";
 import type { State } from "./state.ts";
+import { assetAad, openContext, readBody } from "./vault.ts";
+import type { Context } from "./vault.ts";
 import { withLock } from "./store/fsx.ts";
 import { statePaths } from "./store/paths.ts";
 import type { StatePaths } from "./store/paths.ts";
@@ -79,33 +73,7 @@ function stringList(req: Record<string, unknown>, name: string): Set<string> {
   return out;
 }
 
-// ---------- state access ----------
-
-type Context = { state: State; keys: DerivedKeys };
-
-function openContext(paths: StatePaths): Context {
-  const master = loadMasterKey(paths);
-  const keys = deriveKeys(master, readSalt(paths));
-  master.fill(0);
-  return { state: loadState(paths, keys.stateMac), keys };
-}
-
-function assetAad(setupId: string, asset: string, version: number): Buffer {
-  return aad("tbv/asset/v1", setupId, asset, version);
-}
-
-function readBody(ctx: Context, asset: string): string {
-  const { state, keys } = ctx;
-  const record = state.assets.get(asset);
-  const keyRecord = record && state.keys.find((k) => k.version === record.version);
-  if (!record || !keyRecord) throw new IntegrityError("asset key version");
-  const dek = unwrapDataKey(keys.kek, state.setupId, keyRecord);
-  try {
-    return openSealed(dek, record.sealed, assetAad(state.setupId, asset, record.version), "asset").toString("utf8");
-  } finally {
-    dek.fill(0);
-  }
-}
+// ---------- access ----------
 
 /** Decide, decrypt on allow (fail closed on integrity errors), and durably record the decision. */
 function authorizeAndRecord(
