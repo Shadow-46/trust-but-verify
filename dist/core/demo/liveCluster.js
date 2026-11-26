@@ -31,6 +31,7 @@ export function clusterInit(dir        ) {
   mkdirSync(dir, { recursive: true });
   const cp = ControlPlane.create(join(dir, "control"));
   const d = enrolNew(cp, dir, 1);
+  for (const n of NODE_NAMES) cp.provision(join(dir, n)); // anchor + epoch floor, out of band
   return { epoch: cp.policy.epoch, device: d.device_id, nodes: NODE_NAMES.map((n) => join(dir, n)), control: cp.paths.dir };
 }
 

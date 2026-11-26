@@ -1,5 +1,7 @@
+import { createHash } from "node:crypto";
 import { join } from "node:path";
 import { generateSigningKeyPair } from "../crypto/sign.ts";
+import type { NodeTrust } from "./node.ts";
 import { atomicWriteFile, ensurePrivateDir, readTextIfExists } from "../store/fsx.ts";
 import { IntegrityError, RequestError } from "../errors.ts";
 import { signPolicy, verifyPolicy } from "./policy.ts";
@@ -82,6 +84,23 @@ export class ControlPlane {
     atomicWriteFile(this.paths.published, JSON.stringify(signPolicy(this.signingKey, this.policy)));
     this.publishedAt.set(this.policy.epoch, now);
     return this.policy.epoch;
+  }
+
+  /**
+   * Provision a node out of band: its trust anchor, plus the current epoch as a
+   * floor and the exact policy at that epoch. A freshly started node therefore
+   * never trusts an older (genuinely signed) policy, e.g. one from before a revocation.
+   */
+  provision(nodeDir: string): NodeTrust {
+    ensurePrivateDir(nodeDir);
+    const published = readTextIfExists(this.paths.published) ?? "";
+    const trust: NodeTrust = {
+      anchor: this.anchor.toString("base64"),
+      min_epoch: this.policy.epoch,
+      policy_sha256: createHash("sha256").update(published, "utf8").digest("hex"),
+    };
+    atomicWriteFile(join(nodeDir, "trust.json"), JSON.stringify(trust));
+    return trust;
   }
 
   enrolDevice(owner: string, deviceId: string, publicKeyDer: Buffer, now = Date.now()): number {

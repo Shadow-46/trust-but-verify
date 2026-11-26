@@ -1,6 +1,7 @@
+import { createHash } from "node:crypto";
 import { join } from "node:path";
 import { signBytes, verifyBytes } from "../crypto/sign.ts";
-import { atomicWriteFile, ensurePrivateDir, readTextIfExists } from "../store/fsx.ts";
+import { atomicWriteFile, ensurePrivateDir, readTextIfExists, withLock } from "../store/fsx.ts";
 import { verifyPolicy } from "./policy.ts";
 import type { Policy, SignedPolicy } from "./policy.ts";
 
@@ -51,9 +52,22 @@ export function signRequest(devicePrivateKeyDer: Buffer, r: AccessRequest): Sign
 export type SyncResult =
   | { status: "adopted"; epoch: number }
   | { status: "unchanged"; epoch: number }
-  | { status: "rejected"; epoch: number; reason: "bad_signature" | "rollback" | "unreadable" };
+  | { status: "rejected"; epoch: number; reason: "bad_signature" | "rollback" | "unreadable" | "below_floor" | "bootstrap_mismatch" };
 
 type Transfer = { actor: string; device_id: string; version: number; started_at: number };
+
+/**
+ * Provisioning record written by the control plane when a node is enrolled
+ * (out of band, like the anchor): a new node must not accept any genuinely
+ * signed policy older than the one current at enrolment, and the policy at that
+ * exact epoch must be the one it was provisioned with.
+ */
+export type NodeTrust = { anchor: string; min_epoch: number; policy_sha256: string };
+
+/** Replay nonces and in-flight transfers, persisted so a node restart forgets neither. */
+type ReplayFile = { nonces: [string, number][]; transfers: [string, Transfer][] };
+
+const sha256 = (text: string) => createHash("sha256").update(text, "utf8").digest("hex");
 
 export class ClusterNode {
   readonly name: string;
@@ -68,13 +82,34 @@ export class ClusterNode {
    * @param anchorDer control-plane public key, provisioned out of band (trust anchor)
    * @param source    path of the published signed policy this node pulls
    */
+  /** Provisioned trust floor (absent for nodes created before provisioning existed, e.g. tests). */
+  private readonly trust: NodeTrust | null;
+
   constructor(name: string, dir: string, anchorDer: Buffer, source: string) {
     this.name = name;
     this.dir = dir;
     this.anchor = anchorDer;
     this.source = source;
     ensurePrivateDir(dir);
+    const t = readTextIfExists(join(dir, "trust.json"));
+    this.trust = t ? (JSON.parse(t) as NodeTrust) : null;
+    if (this.trust && this.trust.anchor !== anchorDer.toString("base64")) throw new Error("node trust anchor mismatch");
     this.reloadLocal();
+  }
+
+  /** Start a node from its provisioning record (anchor + epoch floor), pulling from `source`. */
+  static provisioned(name: string, dir: string, source: string): ClusterNode {
+    const t = readTextIfExists(join(dir, "trust.json"));
+    if (!t) throw new Error("node is not provisioned");
+    return new ClusterNode(name, dir, Buffer.from((JSON.parse(t) as NodeTrust).anchor, "base64"), source);
+  }
+
+  /** Enforce the provisioning floor: nothing older, and exactly the provisioned policy at the floor. */
+  private belowTrust(p: Policy, text: string): "below_floor" | "bootstrap_mismatch" | null {
+    if (!this.trust) return null;
+    if (p.epoch < this.trust.min_epoch) return "below_floor";
+    if (p.epoch === this.trust.min_epoch && sha256(text) !== this.trust.policy_sha256) return "bootstrap_mismatch";
+    return null;
   }
 
   /**
@@ -87,6 +122,7 @@ export class ClusterNode {
     if (!cached) return;
     try {
       const p = verifyPolicy(this.anchor, JSON.parse(cached) as SignedPolicy);
+      if (this.belowTrust(p, cached)) throw new Error("below trust floor");
       if (p.epoch >= this.epoch) this.policy = p;
     } catch {
       this.policy = null;
@@ -105,12 +141,24 @@ export class ClusterNode {
   sync(now?: number): SyncResult {
     const text = readTextIfExists(this.source);
     if (!text) return { status: "rejected", epoch: this.epoch, reason: "unreadable" };
+    return this.adoptText(text, now);
+  }
+
+  /**
+   * Verify and (if newer) adopt a signed policy received by any transport: a
+   * shared file (`sync`) or the network (core/cluster/transport.ts). The bytes
+   * are untrusted; only the ML-DSA signature, the epoch and the provisioning
+   * floor decide.
+   */
+  adoptText(text: string, now?: number): SyncResult {
     let incoming: Policy;
     try {
       incoming = verifyPolicy(this.anchor, JSON.parse(text) as SignedPolicy);
     } catch {
       return { status: "rejected", epoch: this.epoch, reason: "bad_signature" };
     }
+    const floor = this.belowTrust(incoming, text);
+    if (floor) return { status: "rejected", epoch: this.epoch, reason: floor };
     if (incoming.epoch < this.epoch) return { status: "rejected", epoch: this.epoch, reason: "rollback" };
     if (incoming.epoch === this.epoch) return { status: "unchanged", epoch: this.epoch };
     // Persist first, adopt in memory last: if either write fails, the next sync
@@ -144,8 +192,40 @@ export class ClusterNode {
     }
     if (!Number.isFinite(req.ts) || Math.abs(now - req.ts) > MAX_CLOCK_SKEW_MS) return this.deny("stale_or_future_request");
 
+    // Replay nonces and transfers live on disk (under the node's lock), so a restarted node,
+    // or a second process on the same node directory, still refuses a replay and still
+    // lets an in-flight transfer finish.
+    return withLock(this.dir, () => {
+      this.loadReplay(now);
+      const d = this.decide(req, p, now);
+      this.saveReplay();
+      return d;
+    });
+  }
+
+  private loadReplay(now: number): void {
+    this.nonces.clear();
+    this.transfers.clear();
+    const text = readTextIfExists(join(this.dir, "replay.json"));
+    if (!text) return;
+    try {
+      const f = JSON.parse(text) as ReplayFile;
+      for (const [k, t] of f.nonces) if (now - t <= 2 * MAX_CLOCK_SKEW_MS) this.nonces.set(k, t);
+      // Keep expired transfers a while longer so a late chunk is refused as "transfer_expired".
+      for (const [id, t] of f.transfers) if (now - t.started_at <= 2 * MAX_TRANSFER_MS) this.transfers.set(id, t);
+    } catch {
+      // Unreadable replay file: start empty. In-flight transfers then end (fail safe); nonces are
+      // still bounded by the ±30 s timestamp window.
+    }
+  }
+
+  private saveReplay(): void {
+    const f: ReplayFile = { nonces: [...this.nonces], transfers: [...this.transfers] };
+    atomicWriteFile(join(this.dir, "replay.json"), JSON.stringify(f));
+  }
+
+  private decide(req: SignedAccessRequest, p: Policy, now: number): NodeDecision {
     // Replay protection: a nonce is accepted once within the skew window.
-    for (const [n, seen] of this.nonces) if (now - seen > 2 * MAX_CLOCK_SKEW_MS) this.nonces.delete(n);
     const nonceKey = `${req.device_id}\u0000${req.nonce}`;
     if (this.nonces.has(nonceKey)) return this.deny("replayed_request");
 
