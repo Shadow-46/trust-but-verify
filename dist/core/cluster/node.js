@@ -98,8 +98,12 @@ export class ClusterNode {
     return this.policy?.epoch ?? 0;
   }
 
-  /** Pull the published policy; adopt it only if authentic and newer. */
-  sync(now = Date.now())             {
+  /**
+   * Pull the published policy; adopt it only if authentic and newer. The ack's
+   * `adopted_at` is stamped after verification and persistence (i.e. when the
+   * node actually starts enforcing), unless a fixed `now` is given by tests.
+   */
+  sync(now         )             {
     const text = readTextIfExists(this.source);
     if (!text) return { status: "rejected", epoch: this.epoch, reason: "unreadable" };
     let incoming        ;
@@ -113,7 +117,8 @@ export class ClusterNode {
     // Persist first, adopt in memory last: if either write fails, the next sync
     // retries the whole adoption instead of treating the epoch as already done.
     atomicWriteFile(join(this.dir, "policy.signed.json"), text);
-    atomicWriteFile(join(this.dir, "ack.json"), JSON.stringify({ node: this.name, epoch: incoming.epoch, adopted_at: now }));
+    const adoptedAt = now ?? Date.now();
+    atomicWriteFile(join(this.dir, "ack.json"), JSON.stringify({ node: this.name, epoch: incoming.epoch, adopted_at: adoptedAt }));
     this.policy = incoming;
     return { status: "adopted", epoch: incoming.epoch };
   }
@@ -126,6 +131,7 @@ export class ClusterNode {
   authorize(req                     , now = Date.now())               {
     const p = this.policy;
     if (!p) return this.deny("no_policy");
+    if (req.op !== "request" && req.op !== "begin_transfer" && req.op !== "chunk") return this.deny("invalid_op");
 
     const device = p.devices.find((d) => d.device_id === req.device_id);
     if (!device) return this.deny("unknown_device");

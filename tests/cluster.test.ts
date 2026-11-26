@@ -135,6 +135,22 @@ test("key rotation: old version accepted until the cutoff, then rejected everywh
   assert.deepEqual(decisions(nodes, req(laptop, after, { key_version: 2 }), after), ["allow", "allow", "allow"]);
 });
 
+test("revoking a device stops its in-flight transfer, and unknown ops are denied", () => {
+  const { cp, nodes, syncAll, device } = cluster(["node-a"]);
+  const phone = device("maya", "maya-phone");
+  syncAll();
+  const t = Date.now();
+  assert.equal(nodes[0].authorize(req(phone, t, { op: "begin_transfer", transfer_id: "tx" }), t).decision, "allow");
+  cp.revokeDevice("maya-phone", t + 1);
+  syncAll(t + 2);
+  const chunk = req(phone, t + 3, { op: "chunk", transfer_id: "tx" });
+  assert.equal(nodes[0].authorize(chunk, t + 3).reason, "device_revoked");
+  const laptop = device("maya", "maya-laptop");
+  syncAll();
+  const bogus = req(laptop, Date.now(), { op: "delete_everything" as RequestOp });
+  assert.equal(nodes[0].authorize(bogus).reason, "invalid_op");
+});
+
 test("nodes refuse forged policies and rollback to an older epoch", () => {
   const { base, cp, nodes, syncAll, device } = cluster();
   device("maya", "maya-phone");

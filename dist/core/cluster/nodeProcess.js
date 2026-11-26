@@ -25,7 +25,7 @@ const timer = setInterval(() => {
     return;
   }
   try {
-    const r = node.sync(Date.now());
+    const r = node.sync();
     if (r.status === "rejected" && r.reason !== "unreadable") {
       process.stderr.write(`[${name}] refused policy update: ${r.reason}\n`);
     }
