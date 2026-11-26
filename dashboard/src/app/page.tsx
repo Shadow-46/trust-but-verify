@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Bell, Check, Crosshair, FileText, KeyRound, LayoutGrid, MessagesSquare, Network, ScrollText, ShieldCheck, ShieldX, Users, X } from "lucide-react";
 import { animate, motion } from "motion/react";
 import { Tour } from "@/components/tour";
+import { NetworkMap } from "@/components/network-map";
 import type { TourStep } from "@/components/tour";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -205,6 +206,16 @@ export default function Console() {
     void api("evidence").then((r) => setEv(r.out));
     void api("attacks").then((r) => setAttacks(Array.isArray(r.out) ? r.out : []));
   }, [refresh]);
+
+  // Keep the network map live while the Nodes page is open (also restores it after a refresh).
+  useEffect(() => {
+    if (section !== "nodes") return;
+    // Subscribing to the external cluster: polling sets state from the API response.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    void pollCluster();
+    const t = setInterval(() => void pollCluster(), 800);
+    return () => clearInterval(t);
+  }, [section, pollCluster]);
 
   // Demo panels (checklist results, last decision, verification, detector run, chat, attack results)
   // live on the server, so a refresh or a second laptop sees the same session.
@@ -537,27 +548,15 @@ export default function Console() {
               {!live && <p className="px-4 py-8 text-center text-sm text-[#5C6370]">Start the cluster to launch three node processes that enforce the signed policy.</p>}
               {live && (
                 <>
-                  <div className="grid gap-3 p-4 md:grid-cols-3">
-                    {live.nodes.map((n: any) => {
-                      const running = live.running?.[n.name];
-                      const allowed = n.decision === "allow";
-                      return (
-                        <motion.div key={n.name} layout className={`rounded-lg border p-3 text-sm ${running ? "border-[#E3E5E8]" : "border-dashed border-[#CBD0D6] bg-[#FBFBFC]"}`}>
-                          <div className="flex items-center justify-between">
-                            <span className="font-medium">{n.name}</span>
-                            <span className="inline-flex items-center gap-1.5 text-xs text-[#5C6370]"><span className={`size-1.5 rounded-full ${running ? "bg-[#0F7B4F]" : "bg-[#AEB4BD]"}`} />{running ? "Running" : "Stopped"}</span>
-                          </div>
-                          <motion.div key={n.epoch} initial={{ backgroundColor: "#EEF2FF" }} animate={{ backgroundColor: "rgba(255,255,255,0)" }} transition={{ duration: 1.2 }} className="mt-2 rounded px-1 font-mono text-xs text-[#5C6370]">policy epoch {n.epoch}</motion.div>
-                          <motion.div key={n.decision} initial={{ scale: 0.96, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} className={`mt-2 rounded-md px-2 py-1.5 ${allowed ? "bg-[#E7F5EE] text-[#0F7B4F]" : "bg-[#FDECEA] text-[#B42318]"}`}>
-                            maya&apos;s phone: {allowed ? "Allowed" : "Denied"} <span className="text-xs opacity-80">({n.reason.replace(/_/g, " ")})</span>
-                          </motion.div>
-                          <div className="mt-2">
-                            <Button size="sm" variant="ghost" disabled={busy} onClick={async () => { await api(running ? "cluster-stop" : "cluster-restart", { node: n.name }); await new Promise((r) => setTimeout(r, 300)); await pollCluster(); }}>{running ? "Stop node" : "Restart node"}</Button>
-                          </div>
-                        </motion.div>
-                      );
-                    })}
-                  </div>
+                  <NetworkMap
+                    live={live}
+                    running={live.running}
+                    onAction={async (action, node) => {
+                      await api(action, { node });
+                      await new Promise((r) => setTimeout(r, 250));
+                      await pollCluster();
+                    }}
+                  />
                   <div className="flex items-center justify-between border-t border-[#E3E5E8] px-4 py-2.5 text-xs text-[#5C6370]">
                     <span>Published policy epoch {live.published_epoch}, device {live.device}</span>
                     {ripple && <motion.span initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="font-medium text-[#14171C]">{ripple}</motion.span>}

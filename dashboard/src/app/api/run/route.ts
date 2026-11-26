@@ -21,16 +21,49 @@ const CLUSTER = join(tmpdir(), "tbv-dashboard-cluster");
 const SESSION = join(tmpdir(), "tbv-dashboard-session.json");
 const SESSION_KEYS = ["checklist", "lastRead", "verify", "detector", "chat", "attackResults", "ripple"];
 const NODE_NAMES = ["node-a", "node-b", "node-c"];
-// Node processes survive between requests (and dev hot reloads) on globalThis.
-const g = globalThis as unknown as { __tbvNodes?: Map<string, ChildProcess> };
+// Node processes and the policy server survive between requests (and dev hot reloads) on globalThis.
+const g = globalThis as unknown as { __tbvNodes?: Map<string, ChildProcess>; __tbvPolicy?: { proc: ChildProcess; port: number } };
 const nodes = (g.__tbvNodes ??= new Map<string, ChildProcess>());
 function stopNode(name: string) {
   nodes.get(name)?.kill();
   nodes.delete(name);
 }
+
+/** The control plane's HTTP policy endpoint (its own process); nodes pull from it over the network. */
+function stopPolicyServer() {
+  g.__tbvPolicy?.proc.kill();
+  g.__tbvPolicy = undefined;
+}
+function startPolicyServer(): Promise<number> {
+  stopPolicyServer();
+  const proc = spawn(process.execPath, [join(ROOT, "dist", "core", "cluster", "policyServerProcess.js"), join(CLUSTER, "control")], { stdio: ["ignore", "pipe", "ignore"] });
+  return new Promise((resolvePort, reject) => {
+    const t = setTimeout(() => reject(new Error("policy server did not start")), 10_000);
+    let buf = "";
+    proc.stdout!.on("data", (d: Buffer) => {
+      buf += d.toString("utf8");
+      const m = /ready (\d+)/.exec(buf);
+      if (m) {
+        clearTimeout(t);
+        g.__tbvPolicy = { proc, port: Number(m[1]) };
+        resolvePort(Number(m[1]));
+      }
+    });
+  });
+}
+const policyUrl = () => (g.__tbvPolicy ? `http://127.0.0.1:${g.__tbvPolicy.port}/policy` : join(CLUSTER, "control"));
+
+function setBlocked(name: string, blocked: boolean) {
+  const file = join(CLUSTER, "control", "blocked.json");
+  const list = new Set<string>(existsSync(file) ? (JSON.parse(readFileSync(file, "utf8")) as string[]) : []);
+  if (blocked) list.add(name);
+  else list.delete(name);
+  writeFileSync(file, JSON.stringify([...list]));
+}
+
 function startNode(name: string) {
   stopNode(name);
-  const p = spawn(process.execPath, [join(ROOT, "dist", "core", "cluster", "nodeProcess.js"), name, join(CLUSTER, name), join(CLUSTER, "control"), "20"], { stdio: "ignore" });
+  const p = spawn(process.execPath, [join(ROOT, "dist", "core", "cluster", "nodeProcess.js"), name, join(CLUSTER, name), policyUrl(), "40"], { stdio: "ignore" });
   nodes.set(name, p);
   p.on("exit", () => {
     if (nodes.get(name) === p) nodes.delete(name);
@@ -128,13 +161,22 @@ export async function POST(request: Request) {
         return Response.json({ ok: true, out: { rolled_back: true } });
       case "cluster-start": {
         NODE_NAMES.forEach(stopNode);
+        stopPolicyServer();
         const r = ops("cluster-init", CLUSTER);
+        await startPolicyServer();
         NODE_NAMES.forEach(startNode);
         return Response.json(r);
       }
+      case "cluster-partition":
+      case "cluster-heal": {
+        const name = str("node");
+        if (!NODE_NAMES.includes(name)) throw new Error("invalid node");
+        setBlocked(name, body.action === "cluster-partition");
+        return Response.json({ ok: true, out: { node: name, partitioned: body.action === "cluster-partition" } });
+      }
       case "cluster-status": {
         const r = ops("cluster-status", CLUSTER);
-        return Response.json({ ...r, running: Object.fromEntries(NODE_NAMES.map((n) => [n, nodes.has(n)])) });
+        return Response.json({ ...r, running: Object.fromEntries(NODE_NAMES.map((n) => [n, nodes.has(n)])), server: g.__tbvPolicy ? { port: g.__tbvPolicy.port } : null });
       }
       case "cluster-revoke":
         return Response.json(ops("cluster-revoke", CLUSTER));
