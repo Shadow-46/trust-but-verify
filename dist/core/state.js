@@ -2,6 +2,7 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
                                                
                                                          
+import { checkAuditHead, readAudit } from "./audit/log.js";
 import { atomicWriteFile, readTextIfExists } from "./store/fsx.js";
                                                    
 import { IntegrityError, RequestError } from "./errors.js";
@@ -18,6 +19,11 @@ import { IntegrityError, RequestError } from "./errors.js";
                            
                          
                                    
+                                                                             
+                  
+                                                                              
+                   
+                    
   
 
                   
@@ -29,6 +35,9 @@ import { IntegrityError, RequestError } from "./errors.js";
                     
                                                       
                                   
+                  
+                    
+                     
   
 
                                                
@@ -71,6 +80,15 @@ export function loadState(paths            , macKey        )        {
   }
   const b = JSON.parse(file.body)             ;
   if (b.format !== 1) throw new IntegrityError("state");
+  // Freshness: a rolled-back state.json is older than records already in the log, and a
+  // truncated or swapped log no longer contains the record this state was saved against.
+  const records = readAudit(paths);
+  const last = records.at(-1);
+  if (last && last.state_version > b.version) throw new IntegrityError("state rollback");
+  if (b.audit_seq > 0 && records[b.audit_seq - 1]?.hash !== b.audit_hash) {
+    throw new IntegrityError("audit log truncated or replaced");
+  }
+  if (!checkAuditHead(paths, records)) throw new IntegrityError("audit log truncated or replaced");
   return {
     setupId: b.setup_id,
     salt: Buffer.from(b.salt, "base64"),
@@ -80,10 +98,18 @@ export function loadState(paths            , macKey        )        {
     activeKeyVersion: b.keyring.active,
     keys: b.keyring.keys,
     assets: new Map(b.assets),
+    version: b.version,
+    auditSeq: b.audit_seq,
+    auditHash: b.audit_hash,
   };
 }
 
+/** Save with version + 1, bound to the current audit head. Mutates `s` accordingly. */
 export function saveState(paths            , macKey        , s       )       {
+  const last = readAudit(paths).at(-1);
+  s.version += 1;
+  s.auditSeq = last?.seq ?? 0;
+  s.auditHash = last?.hash ?? "";
   const body            = {
     format: 1,
     setup_id: s.setupId,
@@ -93,6 +119,9 @@ export function saveState(paths            , macKey        , s       )       {
     revoked: [...s.revoked],
     keyring: { active: s.activeKeyVersion, keys: s.keys },
     assets: [...s.assets],
+    version: s.version,
+    audit_seq: s.auditSeq,
+    audit_hash: s.auditHash,
   };
   const bodyJson = JSON.stringify(body);
   const file            = { body: bodyJson, mac: mac(macKey, bodyJson).toString("hex") };
