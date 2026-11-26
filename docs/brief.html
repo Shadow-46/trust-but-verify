@@ -11,7 +11,7 @@ code { font: 8.4pt Consolas, monospace; background: #f3f5f7; padding: 0 2px; } .
 </style></head><body>
 
 <h1>Trust, but verify</h1>
-<div class="meta"><b>Team:</b> [TEAM NAME] — Shadow-46, Lomada-Sahithi · <b>Repository:</b> https://github.com/Shadow-46/trust-but-verify ([COMMIT]) · <b>Demo:</b> <code>echo '{…}' | node track4_service.mjs</code> · console: <code>cd dashboard &amp;&amp; npm run dev</code></div>
+<div class="meta"><b>Team:</b> WASD — Shadow-46, Lomada-Sahithi · <b>Repository:</b> https://github.com/Shadow-46/trust-but-verify ([COMMIT]) · <b>Demo:</b> <code>echo '{…}' | node track4_service.mjs</code> · console: <code>cd dashboard &amp;&amp; npm run dev</code></div>
 
 <h2>Unique selling proposition</h2>
 <p>When a device is lost or a key must rotate, most systems keep trusting stale credentials and cannot prove what they decided. Our prototype revokes a device on every node in about 20 ms, rotates keys with a documented cutoff while transfers finish, protects files and messages with post-quantum cryptography against "harvest now, decrypt later", and — the core differentiator — <span class="k">every allow and every block carries a plain-language reason in an ML-DSA-signed, tamper-evident log</span>. It fails closed on any integrity doubt, including an attacker rolling state back to undo a revocation. Zero dependencies: only vetted <code>node:crypto</code> (OpenSSL 3.5) primitives, no custom crypto, no ML.</p>
