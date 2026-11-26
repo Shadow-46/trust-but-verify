@@ -1,337 +1,540 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
-import {
-  Activity, CheckCircle2, Clock, FileLock2, Fingerprint, KeyRound, Network, Radar, RotateCcw,
-  ShieldAlert, ShieldCheck, Smartphone, Undo2, XCircle, Zap,
-} from "lucide-react";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { Bell, Check, FileText, KeyRound, LayoutGrid, Network, ScrollText, Users, X } from "lucide-react";
 import { toast } from "sonner";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Separator } from "@/components/ui/separator";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
-type Res = { ok: boolean; out: any; ms?: number };
-type LogRow = { seq: number; ts: string; type: string; actor: string | null; asset: string | null; decision: string | null; reason: string | null; hash: string };
+type Res = { ok: boolean; out: any; blocked?: boolean; ms?: number };
+type Row = { seq: number; ts: string; type: string; actor: string | null; asset: string | null; decision: string | null; reason: string | null; hash: string };
+type Section = "overview" | "files" | "users" | "audit" | "keys" | "nodes" | "alerts";
 
-const ACTORS = ["maya", "omar", "dana", "mallory"];
-const ASSETS = ["design-doc", "payroll.xlsx", "roadmap"];
-const REASONS: Record<string, string> = {
-  owner: "Owner on a trusted device",
-  not_owner: "Not the owner of this file",
-  revoked: "Identity revoked — device reported lost",
+const USERS = ["maya", "omar", "dana", "mallory"];
+const BECAUSE: Record<string, string> = {
+  owner: "the identity owns it and its device is trusted",
+  not_owner: "the identity does not own this file",
+  revoked: "the identity was revoked after its device was reported lost",
+  disabled: "the account is disabled",
+  unknown_asset: "the file does not exist",
+  integrity_failure: "stored data failed its integrity check",
+  request_id_reused: "the request ID was already used",
+};
+const SHORT: Record<string, string> = {
+  owner: "Owner, trusted device",
+  not_owner: "Not the owner",
+  revoked: "Revoked, device lost",
   disabled: "Account disabled",
   unknown_asset: "No such file",
-  integrity_failure: "Stored data failed integrity check",
-  request_id_reused: "Reused request ID",
+  integrity_failure: "Integrity check failed",
+  request_id_reused: "Request ID reused",
 };
 
-async function call(action: string, extra: Record<string, unknown> = {}): Promise<Res> {
+async function api(action: string, extra: Record<string, unknown> = {}): Promise<Res> {
   const r = await fetch("/api/run", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ action, ...extra }) });
   return r.json();
 }
 
-function Verdict({ d }: { d: string | null }) {
-  if (d === "allow")
-    return <Badge className="gap-1 border-emerald-500/30 bg-emerald-500/15 text-emerald-300"><CheckCircle2 className="size-3" />ALLOW</Badge>;
-  if (d === "deny")
-    return <Badge className="gap-1 border-rose-500/30 bg-rose-500/15 text-rose-300"><XCircle className="size-3" />DENY</Badge>;
-  return <Badge variant="outline" className="text-muted-foreground">event</Badge>;
+const time = (iso: string) => new Date(iso).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+
+function Status({ d }: { d: string | null }) {
+  if (d === "allow") return <span className="inline-flex items-center gap-1.5 text-[#0F7B4F]"><span className="size-1.5 rounded-full bg-[#0F7B4F]" />Allowed</span>;
+  if (d === "deny") return <span className="inline-flex items-center gap-1.5 text-[#B42318]"><span className="size-1.5 rounded-full bg-[#B42318]" />Denied</span>;
+  return <span className="inline-flex items-center gap-1.5 text-[#5C6370]"><span className="size-1.5 rounded-full bg-[#AEB4BD]" />Event</span>;
 }
 
-function Kpi({ icon: Icon, label, value, hint }: { icon: typeof Zap; label: string; value: string; hint: string }) {
+function Th({ children, className = "" }: { children?: React.ReactNode; className?: string }) {
+  return <th className={`border-b border-[#E3E5E8] px-4 py-2 text-left text-xs font-medium text-[#5C6370] ${className}`}>{children}</th>;
+}
+function Td({ children, className = "" }: { children?: React.ReactNode; className?: string }) {
+  return <td className={`border-b border-[#EEF0F2] px-4 py-2.5 align-top ${className}`}>{children}</td>;
+}
+function Panel({ title, action, children }: { title: string; action?: React.ReactNode; children: React.ReactNode }) {
   return (
-    <Card className="border-white/10 bg-white/[0.03] backdrop-blur">
-      <CardContent className="flex items-start gap-3 p-4">
-        <div className="rounded-lg bg-sky-500/10 p-2 text-sky-300"><Icon className="size-5" /></div>
-        <div>
-          <div className="text-xs uppercase tracking-wider text-muted-foreground">{label}</div>
-          <div className="font-heading text-2xl font-semibold tabular-nums">{value}</div>
-          <div className="text-xs text-muted-foreground">{hint}</div>
+    <section className="rounded-lg border border-[#E3E5E8] bg-white">
+      <div className="flex items-center justify-between gap-4 border-b border-[#E3E5E8] px-4 py-3">
+        <h2 className="text-sm font-semibold">{title}</h2>
+        {action}
+      </div>
+      {children}
+    </section>
+  );
+}
+function Stats({ items }: { items: { label: string; value: string; note: string }[] }) {
+  return (
+    <div className="grid overflow-hidden rounded-lg border border-[#E3E5E8] bg-white sm:grid-cols-2 lg:grid-cols-4">
+      {items.map((s, i) => (
+        <div key={s.label} className={`px-4 py-3 ${i > 0 ? "border-t border-[#E3E5E8] sm:border-t-0 sm:border-l" : ""}`}>
+          <div className="text-xs text-[#5C6370]">{s.label}</div>
+          <div className="mt-1 text-xl font-semibold tabular-nums">{s.value}</div>
+          <div className="text-xs text-[#5C6370]">{s.note}</div>
         </div>
-      </CardContent>
-    </Card>
+      ))}
+    </div>
   );
 }
+const primary = "bg-[#1D4ED8] text-white hover:bg-[#1A43B8]";
 
-function Panel({ title, desc, icon: Icon, children, className = "" }: { title: string; desc: string; icon: typeof Zap; children: React.ReactNode; className?: string }) {
-  return (
-    <Card className={`border-white/10 bg-white/[0.03] ${className}`}>
-      <CardHeader className="pb-3">
-        <CardTitle className="flex items-center gap-2 font-heading text-base"><Icon className="size-4 text-sky-300" />{title}</CardTitle>
-        <CardDescription>{desc}</CardDescription>
-      </CardHeader>
-      <CardContent>{children}</CardContent>
-    </Card>
-  );
+// ---------- guided scenario ----------
+type Step = { title: string; expect: string; run: () => Promise<{ pass: boolean; actual: string }> };
+
+function decisionText(r: Res) {
+  if (r.blocked) return "Refused: integrity check failed, service is fail-closed";
+  if (r.out?.decision === "allow") return "Allowed, contents returned";
+  if (r.out?.decision === "deny") return "Denied, no contents returned";
+  return r.out?.error ? `Error: ${r.out.error}` : "Done";
 }
 
 export default function Console() {
-  const [actor, setActor] = useState("maya");
-  const [asset, setAsset] = useState("design-doc");
-  const [last, setLast] = useState<{ label: string; res: Res } | null>(null);
-  const [log, setLog] = useState<LogRow[]>([]);
+  const [section, setSection] = useState<Section>("overview");
+  const [log, setLog] = useState<Row[]>([]);
   const [state, setState] = useState<any>(null);
-  const [verify, setVerify] = useState<any>(null);
+  const [failClosed, setFailClosed] = useState(false);
   const [ev, setEv] = useState<any>(null);
-  const [det, setDet] = useState<any>(null);
   const [busy, setBusy] = useState(false);
+  const [asUser, setAsUser] = useState("maya");
+  const [lastRead, setLastRead] = useState<{ who: string; file: string; res: Res } | null>(null);
+  const [verify, setVerify] = useState<any>(null);
+  const [filter, setFilter] = useState<"all" | "allow" | "deny">("all");
+  const [confirm, setConfirm] = useState<null | { kind: "revoke"; user: string } | { kind: "rotate" }>(null);
+  const [det, setDet] = useState<any>(null);
+  const [scenarioOpen, setScenarioOpen] = useState(false);
+  const [results, setResults] = useState<({ pass: boolean; actual: string } | null)[]>([]);
 
   const refresh = useCallback(async () => {
-    const [l, s] = await Promise.all([call("log"), call("state")]);
+    const [l, s] = await Promise.all([api("log"), api("state")]);
     setLog(Array.isArray(l.out) ? [...l.out].reverse() : []);
     setState(s.ok ? s.out : null);
+    setFailClosed(!s.ok && s.out?.error === "integrity_failure");
   }, []);
 
-  const act = async (label: string, action: string, extra: Record<string, unknown> = {}) => {
+  const run = useCallback(
+    async (action: string, extra: Record<string, unknown> = {}) => {
+      setBusy(true);
+      try {
+        const r = await api(action, extra);
+        await refresh();
+        return r;
+      } finally {
+        setBusy(false);
+      }
+    },
+    [refresh],
+  );
+
+  useEffect(() => {
+    // Initial load of the operator view (client-only console talking to the local API).
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    void refresh();
+    void api("evidence").then((r) => setEv(r.out));
+  }, [refresh]);
+
+  const read = async (who: string, file: string) => {
+    const res = await run("read", { actor: who, asset: file });
+    setLastRead({ who, file, res });
+    if (res.blocked) toast.error("Request refused", { description: "Integrity check failed. The service is fail-closed until reset." });
+    else toast(`${who} ${res.out?.decision === "allow" ? "was allowed to read" : "was denied"} ${file}`);
+  };
+
+  const steps: Step[] = useMemo(() => {
+    const readMaya = () => api("read", { actor: "maya", asset: "design-doc" });
+    return [
+      { title: "Reset the demo", expect: "Fresh files, keys and signed log", run: async () => { const r = await api("reset"); return { pass: r.out?.ready === true, actual: r.out?.ready ? "Demo files ready" : "Setup failed" }; } },
+      { title: "maya opens design-doc", expect: "Allowed: maya owns it on a trusted device", run: async () => { const r = await readMaya(); return { pass: r.out?.decision === "allow", actual: decisionText(r) }; } },
+      { title: "An attacker copies the state file", expect: "Copy saved (simulated disk access)", run: async () => { const r = await api("snapshot"); return { pass: r.ok, actual: r.ok ? "Copy saved" : "Could not copy" }; } },
+      { title: "maya reports the laptop lost", expect: "maya's access is revoked everywhere", run: async () => { const r = await api("revoke", { actor: "maya" }); return { pass: r.ok, actual: r.ok ? "Revocation recorded and signed" : "Revocation failed" }; } },
+      { title: "The lost laptop tries design-doc", expect: "Denied: identity revoked after device loss", run: async () => { const r = await readMaya(); return { pass: r.out?.decision === "deny", actual: decisionText(r) }; } },
+      { title: "The attacker restores the old copy", expect: "Old state file written back to disk", run: async () => { const r = await api("rollback"); return { pass: r.ok, actual: r.ok ? "Old state restored on disk" : "Restore failed" }; } },
+      { title: "The lost laptop tries again", expect: "Attack blocked: rolled-back state is detected and every request is refused", run: async () => { const r = await readMaya(); return { pass: r.blocked === true, actual: r.blocked ? "Attack blocked: integrity check failed, nothing returned" : decisionText(r) }; } },
+      { title: "Operator resets the demo", expect: "Service healthy again", run: async () => { const r = await api("reset"); return { pass: r.out?.ready === true, actual: r.out?.ready ? "Service healthy" : "Reset failed" }; } },
+    ];
+  }, []);
+
+  const runStep = async (i: number) => {
     setBusy(true);
     try {
-      const res = await call(action, extra);
-      setLast({ label, res });
-      const o = res.out ?? {};
-      if (o.decision === "allow") toast.success(label, { description: "Allowed — owner on a trusted device" });
-      else if (o.decision === "deny") toast.error(label, { description: "Denied — reason recorded in the signed trail" });
-      else if (o.error) toast.error(label, { description: String(o.error) });
-      else toast(label, { description: res.ms ? `${res.ms} ms` : "done" });
+      const r = await steps[i].run();
+      setResults((prev) => {
+        const next = i === 0 ? [] : [...prev];
+        next[i] = r;
+        return next;
+      });
       await refresh();
-      return res;
     } finally {
       setBusy(false);
     }
   };
 
-  useEffect(() => {
-    // Initial load of the operator view from the local API (client-only console).
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    void refresh();
-    void call("evidence").then((r) => setEv(r.out));
-  }, [refresh]);
-
+  const latest = log.find((r) => r.type === "access_decision" || r.type === "duplicate_request_id");
+  const filtered = log.filter((r) => filter === "all" || r.decision === filter);
   const cl = ev?.cluster;
   const d0 = ev?.detector;
+  const owned = (u: string) => (state?.owners ?? []).filter((o: any) => o.owner === u).map((o: any) => o.asset);
+  const userStatus = (u: string) => (state?.revoked?.includes(u) ? "Revoked" : state?.disabled?.includes(u) ? "Disabled" : "Active");
+
+  const nav: { id: Section; label: string; icon: typeof Users }[] = [
+    { id: "overview", label: "Overview", icon: LayoutGrid },
+    { id: "files", label: "Files", icon: FileText },
+    { id: "users", label: "Users & devices", icon: Users },
+    { id: "audit", label: "Audit log", icon: ScrollText },
+    { id: "keys", label: "Keys", icon: KeyRound },
+    { id: "nodes", label: "Nodes", icon: Network },
+    { id: "alerts", label: "Alerts", icon: Bell },
+  ];
+  const title = nav.find((n) => n.id === section)?.label;
 
   return (
-    <div className="min-h-screen bg-[radial-gradient(ellipse_at_top,rgba(56,189,248,0.12),transparent_55%)]">
-      <header className="sticky top-0 z-10 border-b border-white/10 bg-background/70 backdrop-blur">
-        <div className="mx-auto flex max-w-7xl flex-wrap items-center justify-between gap-3 px-6 py-3">
-          <div className="flex items-center gap-3">
-            <div className="rounded-xl bg-gradient-to-br from-sky-400 to-indigo-500 p-2 shadow-lg shadow-sky-500/20">
-              <ShieldCheck className="size-5 text-white" />
-            </div>
-            <div>
-              <h1 className="font-heading text-lg font-semibold leading-tight">Trust, but verify</h1>
-              <p className="text-xs text-muted-foreground">Post-quantum zero-trust operator console</p>
-            </div>
-          </div>
-          <div className="flex flex-wrap items-center gap-2">
-            {["ML-KEM-768", "ML-DSA-65", "X25519 hybrid", "AES-256-GCM"].map((b) => (
-              <Badge key={b} variant="outline" className="border-white/15 font-mono text-[11px] text-muted-foreground">{b}</Badge>
-            ))}
-            <Badge className="gap-1 border-emerald-500/30 bg-emerald-500/15 text-emerald-300"><Activity className="size-3" />12 / 12 goals measured</Badge>
+    <div className="grid min-h-screen grid-cols-1 bg-[#F6F7F8] text-[#14171C] md:grid-cols-[232px_1fr]">
+      <aside className="border-b border-[#E3E5E8] bg-[#FBFBFC] md:sticky md:top-0 md:h-screen md:border-r md:border-b-0">
+        <div className="flex items-center gap-2.5 px-4 py-4">
+          <div className="grid size-7 place-items-center rounded-md bg-[#14171C] text-xs font-semibold text-white">W</div>
+          <div className="min-w-0">
+            <div className="truncate text-sm font-semibold">Trust, but verify</div>
+            <div className="text-xs text-[#5C6370]">WASD workspace</div>
           </div>
         </div>
-      </header>
+        <nav className="flex gap-1 overflow-x-auto px-2 pb-2 md:flex-col md:pb-0">
+          {nav.map((n) => (
+            <button
+              key={n.id}
+              onClick={() => setSection(n.id)}
+              className={`flex shrink-0 items-center gap-2.5 rounded-md px-2.5 py-1.5 text-left text-sm outline-none focus-visible:ring-2 focus-visible:ring-[#1D4ED8]/40 ${section === n.id ? "bg-white font-medium text-[#14171C] shadow-[0_0_0_1px_#E3E5E8]" : "text-[#5C6370] hover:bg-[#F1F2F4] hover:text-[#14171C]"}`}
+            >
+              <n.icon className="size-4" strokeWidth={1.75} />
+              {n.label}
+            </button>
+          ))}
+        </nav>
+        <div className="hidden px-4 py-4 text-xs text-[#5C6370] md:absolute md:bottom-0 md:block">
+          {failClosed ? <span className="text-[#B42318]">Service is fail-closed</span> : state ? <>State v{state.version}, key v{state.active_key}</> : "Not set up"}
+        </div>
+      </aside>
 
-      <main className="mx-auto max-w-7xl space-y-6 px-6 py-6">
-        <section className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-          <Kpi icon={ShieldCheck} label="Official validator" value="22 / 22" hint="node 24.11.1 · offline · read-only" />
-          <Kpi icon={Zap} label="Revocation → all nodes" value={cl ? `${cl.revocation_propagation_ms.median} ms` : "—"} hint={cl ? `max ${cl.revocation_propagation_ms.max} ms · 3 node processes` : ""} />
-          <Kpi icon={Radar} label="Detector F1" value={d0 ? `${d0.standard.aggregate.f1}` : "—"} hint={d0 ? `${d0.standard.aggregate.false_alerts_per_1000_benign} false alerts / 1k benign` : ""} />
-          <Kpi icon={Clock} label="Request latency" value="≈37 ms" hint="incl. process start · signed audit" />
-        </section>
+      <div className="min-w-0">
+        <header className="sticky top-0 z-10 flex items-center justify-between gap-3 border-b border-[#E3E5E8] bg-[#F6F7F8]/90 px-6 py-3 backdrop-blur">
+          <div className="flex items-center gap-2">
+            <h1 className="text-[15px] font-semibold">{title}</h1>
+            <span className="rounded border border-[#E3E5E8] bg-white px-1.5 py-0.5 text-[11px] text-[#5C6370]">Demo environment</span>
+          </div>
+          <div className="flex gap-2">
+            <Button variant="outline" size="sm" disabled={busy} onClick={async () => { await run("reset"); setResults([]); toast("Demo reset"); }}>Reset demo</Button>
+            <Button size="sm" className={primary} onClick={() => setScenarioOpen(true)}>Run scenario</Button>
+          </div>
+        </header>
 
-        <Tabs defaultValue="device" className="space-y-4">
-          <TabsList className="bg-white/5">
-            <TabsTrigger value="device" className="gap-2"><Smartphone className="size-4" />Lost device</TabsTrigger>
-            <TabsTrigger value="integrity" className="gap-2"><Fingerprint className="size-4" />Integrity &amp; keys</TabsTrigger>
-            <TabsTrigger value="cluster" className="gap-2"><Network className="size-4" />Revocation across nodes</TabsTrigger>
-            <TabsTrigger value="detector" className="gap-2"><Radar className="size-4" />Detector</TabsTrigger>
-          </TabsList>
+        <main className="mx-auto max-w-[1120px] space-y-5 px-6 py-6">
+          {failClosed && (
+            <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-[#F1C9C5] bg-[#FDF3F2] px-4 py-3 text-sm">
+              <div>
+                <span className="font-medium text-[#B42318]">The service is refusing all requests.</span>{" "}
+                <span className="text-[#5C6370]">Stored state no longer matches the signed audit log, so nothing is trusted until an operator restores a verified backup.</span>
+              </div>
+              <Button size="sm" variant="outline" disabled={busy} onClick={async () => { await run("reset"); setResults([]); }}>Reset demo</Button>
+            </div>
+          )}
+          {!state && !failClosed && (
+            <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-[#E3E5E8] bg-white px-4 py-3 text-sm">
+              <span>No demo data yet. Set up three protected files for maya and omar to get started.</span>
+              <Button size="sm" className={primary} disabled={busy} onClick={() => run("reset")}>Set up demo</Button>
+            </div>
+          )}
 
-          <TabsContent value="device" className="grid gap-4 lg:grid-cols-3">
-            <Panel icon={FileLock2} title="Protected workflow" desc="Drives the same adapter the judges call.">
-              <div className="space-y-3">
-                <Button variant="outline" className="w-full justify-start gap-2" disabled={busy} onClick={() => act("Demo files set up", "setup")}>
-                  <RotateCcw className="size-4" />Set up demo files
-                </Button>
-                <div className="grid grid-cols-2 gap-2">
-                  <Select value={actor} onValueChange={(v) => setActor(String(v))}>
-                    <SelectTrigger className="w-full"><SelectValue /></SelectTrigger>
-                    <SelectContent>{ACTORS.map((a) => <SelectItem key={a} value={a}>{a}</SelectItem>)}</SelectContent>
-                  </Select>
-                  <Select value={asset} onValueChange={(v) => setAsset(String(v))}>
-                    <SelectTrigger className="w-full"><SelectValue /></SelectTrigger>
-                    <SelectContent>{ASSETS.map((a) => <SelectItem key={a} value={a}>{a}</SelectItem>)}</SelectContent>
+          {section === "overview" && (
+            <>
+              <section className="rounded-lg border border-[#E3E5E8] bg-white px-6 py-6">
+                <div className="text-xs text-[#5C6370]">Latest access decision{latest ? `, ${time(latest.ts)}` : ""}</div>
+                {latest ? (
+                  <p className="mt-2 max-w-[60ch] text-2xl leading-snug font-medium tracking-tight">
+                    {latest.actor} was{" "}
+                    <span className={latest.decision === "allow" ? "text-[#0F7B4F]" : "text-[#B42318]"}>{latest.decision === "allow" ? "allowed to read" : "denied access to"}</span>{" "}
+                    {latest.asset} because {BECAUSE[latest.reason ?? ""] ?? latest.reason}.
+                  </p>
+                ) : (
+                  <p className="mt-2 text-2xl font-medium tracking-tight text-[#5C6370]">No decisions yet. Open a file from the Files page or run the scenario.</p>
+                )}
+                {latest && <div className="mt-3 font-mono text-xs text-[#5C6370]">Signed record #{latest.seq}, hash {latest.hash}</div>}
+              </section>
+              <Stats
+                items={[
+                  { label: "Official validator", value: "22 / 22", note: "Node 24.11.1, offline" },
+                  { label: "Revocation reaches all nodes", value: cl ? `${cl.revocation_propagation_ms.median} ms` : "–", note: cl ? `worst case ${cl.revocation_propagation_ms.max} ms` : "" },
+                  { label: "Detector F1", value: d0 ? String(d0.standard.aggregate.f1) : "–", note: d0 ? `${d0.standard.aggregate.false_alerts_per_1000_benign} false alerts per 1,000 events` : "" },
+                  { label: "Time per request", value: "37 ms", note: "including a signed audit record" },
+                ]}
+              />
+              <Panel title="Recent decisions" action={<button className="text-sm text-[#1D4ED8] hover:underline" onClick={() => setSection("audit")}>Open audit log</button>}>
+                <DecisionTable rows={log.filter((r) => r.decision).slice(0, 6)} />
+              </Panel>
+            </>
+          )}
+
+          {section === "files" && (
+            <Panel
+              title="Protected files"
+              action={
+                <div className="flex items-center gap-2 text-sm text-[#5C6370]">
+                  Request as
+                  <Select value={asUser} onValueChange={(v) => setAsUser(String(v))}>
+                    <SelectTrigger size="sm" className="w-28 bg-white"><SelectValue /></SelectTrigger>
+                    <SelectContent>{USERS.map((u) => <SelectItem key={u} value={u}>{u}</SelectItem>)}</SelectContent>
                   </Select>
                 </div>
-                <Button className="w-full justify-start gap-2 bg-sky-500 text-white hover:bg-sky-400" disabled={busy} onClick={() => act(`${actor} reads ${asset}`, "read", { actor, asset })}>
-                  <FileLock2 className="size-4" />Read as {actor}
-                </Button>
-                <Button variant="destructive" className="w-full justify-start gap-2" disabled={busy} onClick={() => act(`${actor}'s device reported lost`, "revoke", { actor })}>
-                  <ShieldAlert className="size-4" />Report {actor}&apos;s device lost
-                </Button>
-                {last && (
-                  <div className="rounded-lg border border-white/10 bg-black/30 p-3">
-                    <div className="mb-2 flex items-center justify-between gap-2 text-sm font-medium">
-                      <span className="truncate">{last.label}</span>
-                      {typeof last.res.ms === "number" && <span className="font-mono text-xs text-muted-foreground">{last.res.ms} ms</span>}
-                    </div>
-                    {last.res.out?.decision && <Verdict d={last.res.out.decision} />}
-                    <pre className="mt-2 max-h-28 overflow-auto whitespace-pre-wrap break-all font-mono text-[11px] text-muted-foreground">{JSON.stringify(last.res.out, null, 1)}</pre>
-                  </div>
-                )}
-                {state && (
-                  <>
-                    <Separator className="bg-white/10" />
-                    <dl className="grid grid-cols-2 gap-y-1 text-xs">
-                      <dt className="text-muted-foreground">State version</dt><dd className="font-mono">{state.version}</dd>
-                      <dt className="text-muted-foreground">Active key</dt><dd className="font-mono">v{state.active_key}</dd>
-                      <dt className="text-muted-foreground">Revoked</dt><dd>{state.revoked.join(", ") || "none"}</dd>
-                      <dt className="text-muted-foreground">Disabled</dt><dd>{state.disabled.join(", ") || "none"}</dd>
-                    </dl>
-                  </>
-                )}
-              </div>
-            </Panel>
-
-            <Panel icon={Fingerprint} title="Signed decision trail" desc="Every allow and every block with its reason — hash-chained and ML-DSA-65 signed." className="lg:col-span-2">
-              <div className="max-h-[520px] overflow-auto rounded-lg border border-white/10">
-                <Table>
-                  <TableHeader className="sticky top-0 bg-background/95">
-                    <TableRow><TableHead>#</TableHead><TableHead>Event</TableHead><TableHead>Who</TableHead><TableHead>File</TableHead><TableHead>Decision</TableHead><TableHead>Why</TableHead><TableHead>Hash</TableHead></TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {log.map((r) => (
-                      <TableRow key={r.seq}>
-                        <TableCell className="font-mono text-xs text-muted-foreground">{r.seq}</TableCell>
-                        <TableCell className="capitalize">{r.type.replace(/_/g, " ")}</TableCell>
-                        <TableCell className="font-medium">{r.actor ?? "—"}</TableCell>
-                        <TableCell className="font-mono text-xs">{r.asset ?? "—"}</TableCell>
-                        <TableCell><Verdict d={r.decision} /></TableCell>
-                        <TableCell className="text-sm text-muted-foreground">{(r.reason && REASONS[r.reason]) ?? r.reason ?? ""}</TableCell>
-                        <TableCell className="font-mono text-[11px] text-sky-300/80">{r.hash}…</TableCell>
-                      </TableRow>
-                    ))}
-                    {log.length === 0 && (
-                      <TableRow><TableCell colSpan={7} className="py-12 text-center text-muted-foreground">Set up the demo files to begin.</TableCell></TableRow>
-                    )}
-                  </TableBody>
-                </Table>
-              </div>
-            </Panel>
-          </TabsContent>
-
-          <TabsContent value="integrity" className="grid gap-4 lg:grid-cols-2">
-            <Panel icon={KeyRound} title="Verify & rotate" desc="Anyone with the audit public key can verify the key-event log.">
-              <div className="space-y-3">
-                <Button className="w-full justify-start gap-2 bg-sky-500 text-white hover:bg-sky-400" disabled={busy} onClick={async () => setVerify((await act("Audit log verified", "verify")).out)}>
-                  <Fingerprint className="size-4" />Verify chain + ML-DSA signatures
-                </Button>
-                {verify && (
-                  <div className="flex items-center gap-3 rounded-lg border border-white/10 bg-black/30 p-3 text-sm">
-                    {verify.ok ? <Badge className="border-emerald-500/30 bg-emerald-500/15 text-emerald-300">VALID</Badge> : <Badge className="border-rose-500/30 bg-rose-500/15 text-rose-300">BROKEN</Badge>}
-                    <span>{verify.records} records · signatures checked {verify.signatures_checked ? "✓" : "✗"}{verify.first_bad_seq ? ` · first bad #${verify.first_bad_seq}` : ""}</span>
-                  </div>
-                )}
-                <Button variant="outline" className="w-full justify-start gap-2" disabled={busy} onClick={() => act("Data key rotated", "rotate")}>
-                  <RotateCcw className="size-4" />Rotate data key — re-encrypt every file atomically
-                </Button>
-                {state && (
-                  <div className="flex flex-wrap gap-2">
-                    {state.keys.map((k: any) => (
-                      <Badge key={k.version} variant="outline" className={k.status === "active" ? "border-sky-400/40 text-sky-300" : "border-white/15 text-muted-foreground"}>v{k.version} · {k.status}</Badge>
-                    ))}
-                  </div>
-                )}
-              </div>
-            </Panel>
-            <Panel icon={ShieldAlert} title="Attack: undo a revocation on disk" desc="An attacker restores an older, validly authenticated state file to re-enable a revoked user.">
-              <ol className="space-y-3">
-                <li><Button variant="outline" className="w-full justify-start gap-2" disabled={busy} onClick={() => act("Attacker copied the state file", "snapshot")}><span className="font-mono text-xs text-muted-foreground">1</span>Attacker copies today&apos;s state file</Button></li>
-                <li className="text-xs text-muted-foreground">Now revoke someone on the Lost device tab, then:</li>
-                <li><Button variant="destructive" className="w-full justify-start gap-2" disabled={busy} onClick={() => act("Attacker restored the old state", "rollback")}><Undo2 className="size-4" />Attacker restores the old copy</Button></li>
-                <li><Button className="w-full justify-start gap-2 bg-sky-500 text-white hover:bg-sky-400" disabled={busy} onClick={() => act(`${actor} reads ${asset} after rollback`, "read", { actor, asset })}><FileLock2 className="size-4" />Try to read as {actor}</Button></li>
-              </ol>
-              <p className="mt-3 rounded-lg border border-amber-500/20 bg-amber-500/5 p-3 text-xs text-amber-200/90">
-                Expected <code className="font-mono">integrity_failure</code>: the state version no longer matches the signed audit-log head, so the service fails closed.
-              </p>
-            </Panel>
-          </TabsContent>
-
-          <TabsContent value="cluster">
-            <Panel icon={Network} title="Revocation & rotation across 3 nodes" desc={`ML-DSA-signed, epoch-versioned policy pulled by separate node processes · ${cl?.environment?.node ?? ""} on ${cl?.environment?.platform ?? ""}`}>
-              {cl && (
-                <div className="mb-4 grid gap-4 sm:grid-cols-3">
-                  <Kpi icon={Zap} label="Median propagation" value={`${cl.revocation_propagation_ms.median} ms`} hint="publish → last node enforcing" />
-                  <Kpi icon={Zap} label="Worst case" value={`${cl.revocation_propagation_ms.max} ms`} hint={`${cl.config.samples} samples · ${cl.config.poll_ms} ms polling`} />
-                  <Kpi icon={KeyRound} label="Rotation grace (demo)" value={`${cl.config.grace_ms} ms`} hint="30 s by default" />
+              }
+            >
+              <table className="w-full text-sm">
+                <thead><tr><Th>File</Th><Th>Owner</Th><Th>Encrypted with</Th><Th className="text-right">Action</Th></tr></thead>
+                <tbody>
+                  {(state?.owners ?? []).map((o: any) => (
+                    <tr key={o.asset}>
+                      <Td className="font-medium">{o.asset}</Td>
+                      <Td>{o.owner}</Td>
+                      <Td className="font-mono text-xs text-[#5C6370]">AES-256-GCM, key v{state.active_key}</Td>
+                      <Td className="text-right"><Button size="sm" variant="outline" disabled={busy} onClick={() => read(asUser, o.asset)}>Open as {asUser}</Button></Td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              {lastRead && (
+                <div className="border-t border-[#E3E5E8] px-4 py-3 text-sm">
+                  {lastRead.res.blocked ? (
+                    <span><span className="font-medium text-[#B42318]">Refused.</span> Stored state failed its integrity check, so the service returned nothing.</span>
+                  ) : (
+                    <span>
+                      <Status d={lastRead.res.out?.decision ?? null} /> <span className="ml-1">{lastRead.who} {lastRead.res.out?.decision === "allow" ? "opened" : "could not open"} {lastRead.file}.</span>
+                      {lastRead.res.out?.body && <span className="ml-2 text-[#5C6370]">Contents: “{lastRead.res.out.body}”</span>}
+                      <span className="ml-2 font-mono text-xs text-[#5C6370]">{lastRead.res.ms} ms</span>
+                    </span>
+                  )}
                 </div>
               )}
-              <div className="rounded-lg border border-white/10">
-                <Table>
-                  <TableHeader><TableRow><TableHead>Result</TableHead><TableHead>Step</TableHead><TableHead>Expected</TableHead><TableHead>Observed (node-a)</TableHead></TableRow></TableHeader>
-                  <TableBody>
-                    {cl?.steps?.map((s: any) => (
-                      <TableRow key={s.step}>
-                        <TableCell>{s.pass ? <Badge className="border-emerald-500/30 bg-emerald-500/15 text-emerald-300">PASS</Badge> : <Badge className="border-rose-500/30 bg-rose-500/15 text-rose-300">FAIL</Badge>}</TableCell>
-                        <TableCell className="font-medium capitalize">{s.step}</TableCell>
-                        <TableCell className="text-muted-foreground">{s.expect}</TableCell>
-                        <TableCell className="font-mono text-xs text-muted-foreground">{String(Object.values(s.observed)[0])}</TableCell>
-                      </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
-              </div>
             </Panel>
-          </TabsContent>
+          )}
 
-          <TabsContent value="detector" className="grid gap-4 lg:grid-cols-3">
-            <Panel icon={Radar} title="Accuracy" desc="Rules + approvals context + service-edge graph. No ML.">
-              {d0 && (
-                <div className="space-y-3">
-                  <Kpi icon={Radar} label="F1 · standard / hard" value={`${d0.standard.aggregate.f1} / ${d0.hard.aggregate.f1}`} hint={`${d0.standard.aggregate.incidents + d0.hard.aggregate.incidents} incidents · 10 seeds each`} />
-                  <Kpi icon={Clock} label="Median time-to-alert" value={`${Math.round(d0.standard.aggregate.median_time_to_alert_ms)} ms`} hint="from first incident event" />
-                  <Kpi icon={ShieldCheck} label="False alerts / 1k benign" value={`${d0.standard.aggregate.false_alerts_per_1000_benign}`} hint="upper bound · synthetic data" />
+          {section === "users" && (
+            <Panel title="Users and devices">
+              <table className="w-full text-sm">
+                <thead><tr><Th>User</Th><Th>Status</Th><Th>Owns</Th><Th className="text-right">Action</Th></tr></thead>
+                <tbody>
+                  {USERS.map((u) => {
+                    const st = userStatus(u);
+                    return (
+                      <tr key={u}>
+                        <Td className="font-medium">{u}</Td>
+                        <Td><span className={st === "Active" ? "text-[#0F7B4F]" : st === "Revoked" ? "text-[#B42318]" : "text-[#5C6370]"}>{st}</span></Td>
+                        <Td className="text-[#5C6370]">{owned(u).join(", ") || "Nothing"}</Td>
+                        <Td className="text-right">
+                          <Button size="sm" variant="outline" disabled={busy || st !== "Active"} onClick={() => setConfirm({ kind: "revoke", user: u })}>Report device lost</Button>
+                        </Td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </Panel>
+          )}
+
+          {section === "audit" && (
+            <>
+              {verify && (
+                <div className={`rounded-lg border px-4 py-3 text-sm ${verify.ok ? "border-[#BFE3D0] bg-[#F1FAF5]" : "border-[#F1C9C5] bg-[#FDF3F2]"}`}>
+                  {verify.ok ? (
+                    <><span className="font-medium text-[#0F7B4F]">Log verified.</span> All {verify.records} records are intact and every ML-DSA-65 signature checks out.</>
+                  ) : (
+                    <><span className="font-medium text-[#B42318]">Log broken at record #{verify.first_bad_seq}.</span> A record was edited, removed or reordered.</>
+                  )}
                 </div>
               )}
-              <Button className="mt-4 w-full gap-2 bg-sky-500 text-white hover:bg-sky-400" disabled={busy} onClick={async () => setDet((await act("Detector run on a fresh log", "detect", { seed: Math.floor(Math.random() * 1e6) })).out)}>
-                <Radar className="size-4" />Run on a fresh synthetic log
-              </Button>
-            </Panel>
-            <Panel icon={ShieldAlert} title="Explained alerts" desc="Identity, services, events and the rule that fired — no black boxes." className="lg:col-span-2">
-              <div className="max-h-[560px] space-y-3 overflow-auto pr-1">
-                {det?.alerts?.map((a: any) => (
-                  <div key={a.id} className="rounded-lg border border-white/10 bg-black/30 p-4">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <Badge className={a.severity === "high" ? "border-rose-500/30 bg-rose-500/15 text-rose-300" : "border-amber-500/30 bg-amber-500/15 text-amber-300"}>{a.severity}</Badge>
-                      <span className="font-heading font-medium capitalize">{a.rule.replace(/_/g, " ")}</span>
-                      <span className="text-sm text-muted-foreground">· {a.actor}</span>
-                    </div>
-                    <p className="mt-2 text-sm">{a.summary}</p>
-                    <div className="mt-2 flex flex-wrap gap-1">
-                      {a.services.map((s: string, i: number) => (
-                        <Badge key={`${s}-${i}`} variant="outline" className="border-white/15 font-mono text-[11px]">{s}</Badge>
+              <Panel
+                title="Signed audit log"
+                action={
+                  <div className="flex items-center gap-2">
+                    <div className="flex rounded-md border border-[#E3E5E8] p-0.5 text-xs">
+                      {(["all", "allow", "deny"] as const).map((f) => (
+                        <button key={f} onClick={() => setFilter(f)} className={`rounded px-2 py-1 ${filter === f ? "bg-[#14171C] text-white" : "text-[#5C6370] hover:text-[#14171C]"}`}>
+                          {f === "all" ? "All" : f === "allow" ? "Allowed" : "Denied"}
+                        </button>
                       ))}
                     </div>
-                    <p className="mt-2 font-mono text-[11px] text-muted-foreground">events {a.events.join(", ")}</p>
-                    <p className="text-xs text-muted-foreground/80">limits: {a.limits}</p>
+                    <Button size="sm" className={primary} disabled={busy} onClick={async () => setVerify((await run("verify")).out)}>Verify log</Button>
                   </div>
-                ))}
-                {det?.incidents && (
-                  <p className="rounded-lg border border-white/10 p-3 text-xs text-muted-foreground">
-                    Hidden ground truth: {det.incidents.map((i: any) => i.kind.replace(/_/g, " ")).join(" · ")}
-                  </p>
-                )}
-                {!det && <p className="py-12 text-center text-sm text-muted-foreground">Run the detector to see explained alerts.</p>}
-              </div>
+                }
+              >
+                <DecisionTable rows={filtered} full />
+              </Panel>
+            </>
+          )}
+
+          {section === "keys" && (
+            <Panel title="Data keys" action={<Button size="sm" className={primary} disabled={busy || !state} onClick={() => setConfirm({ kind: "rotate" })}>Rotate key</Button>}>
+              <table className="w-full text-sm">
+                <thead><tr><Th>Version</Th><Th>Status</Th><Th>Created</Th><Th>Protects</Th></tr></thead>
+                <tbody>
+                  {(state?.keys ?? []).slice().reverse().map((k: any) => (
+                    <tr key={k.version}>
+                      <Td className="font-mono">v{k.version}</Td>
+                      <Td><span className={k.status === "active" ? "text-[#0F7B4F]" : "text-[#5C6370]"}>{k.status === "active" ? "Active" : "Retired"}</span></Td>
+                      <Td className="text-[#5C6370]">{new Date(k.created_at).toLocaleString()}</Td>
+                      <Td className="text-[#5C6370]">{k.status === "active" ? `${state.owners.length} files` : "Nothing (re-encrypted)"}</Td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              <p className="border-t border-[#E3E5E8] px-4 py-3 text-xs text-[#5C6370]">Keys are wrapped by a key-encryption key and never leave the service. Rotation re-encrypts every file in one atomic step.</p>
             </Panel>
-          </TabsContent>
-        </Tabs>
-      </main>
+          )}
+
+          {section === "nodes" && cl && (
+            <>
+              <Stats
+                items={[
+                  { label: "Median time to revoke everywhere", value: `${cl.revocation_propagation_ms.median} ms`, note: "publish to last node enforcing" },
+                  { label: "Worst case", value: `${cl.revocation_propagation_ms.max} ms`, note: `${cl.config.samples} measurements` },
+                  { label: "Nodes", value: String(cl.config.nodes.length), note: "separate processes" },
+                  { label: "Key rotation grace", value: "30 s", note: `${cl.config.grace_ms / 1000} s in this run` },
+                ]}
+              />
+              <Panel title="Cluster checks">
+                <table className="w-full text-sm">
+                  <thead><tr><Th>Check</Th><Th>Expected</Th><Th>Observed on node-a</Th><Th className="text-right">Result</Th></tr></thead>
+                  <tbody>
+                    {cl.steps.map((s: any) => (
+                      <tr key={s.step}>
+                        <Td className="font-medium">{s.step.charAt(0).toUpperCase() + s.step.slice(1)}</Td>
+                        <Td className="text-[#5C6370]">{s.expect}</Td>
+                        <Td className="font-mono text-xs text-[#5C6370]">{String(Object.values(s.observed)[0])}</Td>
+                        <Td className="text-right">{s.pass ? <span className="text-[#0F7B4F]">Pass</span> : <span className="text-[#B42318]">Fail</span>}</Td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </Panel>
+            </>
+          )}
+
+          {section === "alerts" && d0 && (
+            <>
+              <Stats
+                items={[
+                  { label: "F1 score", value: `${d0.standard.aggregate.f1}`, note: `hard cases ${d0.hard.aggregate.f1}` },
+                  { label: "Median time to alert", value: `${(d0.standard.aggregate.median_time_to_alert_ms / 1000).toFixed(1)} s`, note: "from the first suspicious event" },
+                  { label: "False alerts", value: `${d0.standard.aggregate.false_alerts_per_1000_benign}`, note: "per 1,000 normal events" },
+                  { label: "Evaluated", value: `${d0.standard.aggregate.incidents + d0.hard.aggregate.incidents}`, note: "injected incidents, 20 runs" },
+                ]}
+              />
+              <Panel title="Suspicious activity" action={<Button size="sm" className={primary} disabled={busy} onClick={async () => setDet((await run("detect", { seed: Math.floor(Math.random() * 1e6) })).out)}>Analyze a new log</Button>}>
+                {!det && <p className="px-4 py-8 text-center text-sm text-[#5C6370]">Analyze a freshly generated access log to see what the detector flags and why.</p>}
+                {det && (
+                  <ul>
+                    {det.alerts.map((a: any) => (
+                      <li key={a.id} className="border-b border-[#EEF0F2] px-4 py-3 text-sm last:border-b-0">
+                        <div className="flex flex-wrap items-baseline gap-x-2">
+                          <span className="font-medium">{a.rule === "unexpected_role_change" ? "Unapproved privilege change" : a.rule === "lateral_movement_candidate" ? "Possible lateral movement" : a.rule.replace(/_/g, " ")}</span>
+                          <span className="text-[#5C6370]">by {a.actor}</span>
+                          <span className={`text-xs ${a.severity === "high" ? "text-[#B42318]" : "text-[#9A6700]"}`}>{a.severity} severity</span>
+                        </div>
+                        <p className="mt-1 max-w-[80ch] text-[#3A404A]">{a.summary}</p>
+                        <p className="mt-1 font-mono text-xs text-[#5C6370]">{a.services.join(" > ")}, events {a.events.join(", ")}</p>
+                      </li>
+                    ))}
+                    <li className="bg-[#FBFBFC] px-4 py-2.5 text-xs text-[#5C6370]">
+                      {det.alerts.length} alerts for {det.incidents.length} hidden incidents ({det.incidents.map((i: any) => i.kind.replace(/_/g, " ")).join(", ")}). The detector never sees these labels.
+                    </li>
+                  </ul>
+                )}
+              </Panel>
+            </>
+          )}
+        </main>
+      </div>
+
+      <Dialog open={confirm !== null} onOpenChange={(o) => !o && setConfirm(null)}>
+        <DialogContent>
+          {confirm?.kind === "revoke" && (
+            <>
+              <DialogHeader>
+                <DialogTitle>Report {confirm.user}&apos;s device lost?</DialogTitle>
+                <DialogDescription>{confirm.user} will be denied on every node from the next request. The revocation is signed into the audit log and cannot be undone by restoring an older backup.</DialogDescription>
+              </DialogHeader>
+              <DialogFooter>
+                <Button variant="outline" onClick={() => setConfirm(null)}>Cancel</Button>
+                <Button variant="destructive" onClick={async () => { const u = confirm.user; setConfirm(null); await run("revoke", { actor: u }); toast(`${u}'s device reported lost`); }}>Report device lost</Button>
+              </DialogFooter>
+            </>
+          )}
+          {confirm?.kind === "rotate" && (
+            <>
+              <DialogHeader>
+                <DialogTitle>Rotate the data key?</DialogTitle>
+                <DialogDescription>A new key version encrypts every file in one atomic step. The old version is retired and can no longer read anything.</DialogDescription>
+              </DialogHeader>
+              <DialogFooter>
+                <Button variant="outline" onClick={() => setConfirm(null)}>Cancel</Button>
+                <Button className={primary} onClick={async () => { setConfirm(null); const r = await run("rotate"); toast(r.ok ? `Key rotated to v${r.out.to}` : "Rotation refused"); }}>Rotate key</Button>
+              </DialogFooter>
+            </>
+          )}
+        </DialogContent>
+      </Dialog>
+
+      <Sheet open={scenarioOpen} onOpenChange={setScenarioOpen}>
+        <SheetContent className="w-full overflow-y-auto bg-white sm:max-w-[480px]">
+          <SheetHeader>
+            <SheetTitle>Lost laptop, then a rollback attack</SheetTitle>
+            <SheetDescription>Run each step in order. Every result is checked against what should happen.</SheetDescription>
+          </SheetHeader>
+          <ol className="px-4 pb-6">
+            {steps.map((s, i) => {
+              const r = results[i];
+              const enabled = !busy && (i === 0 || !!results[i - 1]?.pass);
+              return (
+                <li key={s.title} className="flex gap-3 border-b border-[#EEF0F2] py-3 last:border-b-0">
+                  <span className={`mt-0.5 grid size-6 shrink-0 place-items-center rounded-full text-xs font-medium ${r ? (r.pass ? "bg-[#E7F5EE] text-[#0F7B4F]" : "bg-[#FDECEA] text-[#B42318]") : "bg-[#F1F2F4] text-[#5C6370]"}`}>
+                    {r ? (r.pass ? <Check className="size-3.5" /> : <X className="size-3.5" />) : i + 1}
+                  </span>
+                  <div className="min-w-0 flex-1 text-sm">
+                    <div className="flex items-start justify-between gap-3">
+                      <span className="font-medium">{s.title}</span>
+                      <Button size="sm" variant={r ? "ghost" : "outline"} disabled={!enabled} onClick={() => runStep(i)}>{r ? "Run again" : "Run"}</Button>
+                    </div>
+                    <div className="mt-0.5 text-[#5C6370]">Expected: {s.expect}</div>
+                    {r && <div className={`mt-0.5 ${r.pass ? "text-[#0F7B4F]" : "text-[#B42318]"}`}>Result: {r.actual}</div>}
+                  </div>
+                </li>
+              );
+            })}
+          </ol>
+        </SheetContent>
+      </Sheet>
+    </div>
+  );
+}
+
+function DecisionTable({ rows, full = false }: { rows: Row[]; full?: boolean }) {
+  if (rows.length === 0) return <p className="px-4 py-8 text-center text-sm text-[#5C6370]">No records yet.</p>;
+  return (
+    <div className={full ? "max-h-[560px] overflow-auto" : ""}>
+      <table className="w-full text-sm">
+        <thead className="sticky top-0 bg-white">
+          <tr><Th>#</Th><Th>Time</Th><Th>What happened</Th><Th>Who</Th><Th>File</Th><Th>Decision</Th><Th>Reason</Th>{full && <Th>Record hash</Th>}</tr>
+        </thead>
+        <tbody>
+          {rows.map((r) => (
+            <tr key={r.seq}>
+              <Td className="font-mono text-xs text-[#5C6370]">{r.seq}</Td>
+              <Td className="tabular-nums text-[#5C6370]">{time(r.ts)}</Td>
+              <Td>{r.type === "access_decision" ? "Access request" : r.type === "revoke" ? "Device reported lost" : r.type === "key_rotation" ? "Key rotated" : r.type === "setup" ? "Demo set up" : r.type.replace(/_/g, " ")}</Td>
+              <Td className="font-medium">{r.actor ?? ""}</Td>
+              <Td>{r.asset ?? ""}</Td>
+              <Td><Status d={r.decision} /></Td>
+              <Td className="text-[#5C6370]">{r.reason ? (SHORT[r.reason] ?? r.reason) : ""}</Td>
+              {full && <Td className="font-mono text-xs text-[#5C6370]">{r.hash}</Td>}
+            </tr>
+          ))}
+        </tbody>
+      </table>
     </div>
   );
 }
