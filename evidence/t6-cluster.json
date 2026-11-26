@@ -1,0 +1,136 @@
+{
+  "generated_at": "2026-11-26T09:22:25.650Z",
+  "environment": {
+    "node": "v24.11.1",
+    "openssl": "3.5.4",
+    "platform": "linux",
+    "cpus": 28
+  },
+  "config": {
+    "nodes": [
+      "node-a",
+      "node-b",
+      "node-c"
+    ],
+    "poll_ms": 20,
+    "grace_ms": 1500,
+    "samples": 15,
+    "clock": "single host; all nodes share one clock"
+  },
+  "steps": [
+    {
+      "step": "normal operation",
+      "expect": "enrolled devices allowed on every node",
+      "observed": {
+        "node-a": "allow (authorized)",
+        "node-b": "allow (authorized)",
+        "node-c": "allow (authorized)"
+      },
+      "pass": true
+    },
+    {
+      "step": "lost device after revocation",
+      "expect": "maya-phone denied on every node",
+      "observed": {
+        "node-a": "deny (device_revoked)",
+        "node-b": "deny (device_revoked)",
+        "node-c": "deny (device_revoked)"
+      },
+      "pass": true
+    },
+    {
+      "step": "owner's other device",
+      "expect": "maya-laptop still allowed",
+      "observed": {
+        "node-a": "allow (authorized)",
+        "node-b": "allow (authorized)",
+        "node-c": "allow (authorized)"
+      },
+      "pass": true
+    },
+    {
+      "step": "other users",
+      "expect": "omar unaffected",
+      "observed": {
+        "node-a": "allow (authorized)",
+        "node-b": "allow (authorized)",
+        "node-c": "allow (authorized)"
+      },
+      "pass": true
+    },
+    {
+      "step": "re-enrolment",
+      "expect": "new device for maya allowed",
+      "observed": {
+        "node-a": "allow (authorized)",
+        "node-b": "allow (authorized)",
+        "node-c": "allow (authorized)"
+      },
+      "pass": true
+    },
+    {
+      "step": "rotation grace period",
+      "expect": "old key v1 still accepted before cutoff",
+      "observed": {
+        "node-a": "allow (authorized)",
+        "node-b": "allow (authorized)",
+        "node-c": "allow (authorized)"
+      },
+      "pass": true
+    },
+    {
+      "step": "after cutoff",
+      "expect": "new requests with old key v1 rejected on every node",
+      "observed": {
+        "node-a": "deny (key_version_retired)",
+        "node-b": "deny (key_version_retired)",
+        "node-c": "deny (key_version_retired)"
+      },
+      "pass": true
+    },
+    {
+      "step": "in-flight transfer after cutoff",
+      "expect": "transfer begun before cutoff completes on v1",
+      "observed": {
+        "node-a": "allow (in_flight_transfer)",
+        "node-b": "allow (in_flight_transfer)",
+        "node-c": "allow (in_flight_transfer)"
+      },
+      "pass": true
+    },
+    {
+      "step": "new key",
+      "expect": "requests with key v2 allowed",
+      "observed": {
+        "node-a": "allow (authorized)",
+        "node-b": "allow (authorized)",
+        "node-c": "allow (authorized)"
+      },
+      "pass": true
+    }
+  ],
+  "revocation_propagation_ms": {
+    "definition": "control-plane publish time to the latest node adoption time (each node verifies the ML-DSA signature and epoch)",
+    "samples": [
+      17,
+      18,
+      18,
+      19,
+      18,
+      18,
+      18,
+      18,
+      19,
+      18,
+      19,
+      19,
+      19,
+      18,
+      17
+    ],
+    "median": 18,
+    "p95": 19,
+    "max": 19
+  },
+  "all_passed": true
+}
