@@ -1,0 +1,25 @@
+# Private team coordination repo (cloned here, never part of this repo)
+/team/
+
+# AI assistant files — kept out of the public repository
+CLAUDE.md
+CLAUDE.local.md
+AGENTS.md
+.claude/
+.agents/
+
+# Dependencies and build output
+node_modules/
+*.tsbuildinfo
+
+# Local state, secrets, generated evidence scratch
+.env*
+/state/
+/tmp/
+*.log
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
