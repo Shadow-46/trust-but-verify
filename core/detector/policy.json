@@ -1,0 +1,24 @@
+{
+  "version": 1,
+  "description": "Expected-behaviour baseline for the practice environment. Hand-written from the toolkit's documented context; edit to describe another environment.",
+  "roles": [
+    { "role": "viewer", "targets": ["identity", "catalog"] },
+    { "role": "report-reader", "targets": ["identity", "catalog", "reports", "reports-node-a", "reports-node-b"] },
+    { "role": "operator", "targets": ["identity", "catalog"] },
+    { "role": "service-reader", "targets": ["catalog"] }
+  ],
+  "known_edges": [
+    ["portal", "identity"],
+    ["portal", "catalog"],
+    ["portal", "reports"],
+    ["portal", "reports-node-a"],
+    ["portal", "reports-node-b"],
+    ["admin-console", "identity"],
+    ["reports", "catalog"]
+  ],
+  "out_of_scope_services": ["billing", "archive"],
+  "out_of_scope_actions": [{ "target": "identity", "action": "list_roles" }],
+  "lateral": { "min_distinct_edges": 2, "window_ms": 300000 },
+  "review_after_role_change_window_ms": 1800000,
+  "clock": { "uncertainty_ms": 250, "max_supported_skew_ms": 300000 }
+}
