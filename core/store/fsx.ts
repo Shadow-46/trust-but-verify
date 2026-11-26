@@ -61,8 +61,8 @@ function renameWithRetry(from: string, to: string): void {
       return;
     } catch (err) {
       const code = (err as NodeJS.ErrnoException).code;
-      if (attempt >= 50 || (code !== "EPERM" && code !== "EACCES" && code !== "EBUSY")) throw err;
-      sleepMs(2);
+      if (attempt >= 250 || (code !== "EPERM" && code !== "EACCES" && code !== "EBUSY")) throw err;
+      sleepMs(4);
     }
   }
 }
