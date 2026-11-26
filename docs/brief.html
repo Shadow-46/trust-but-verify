@@ -32,10 +32,10 @@ access logs ──▶ rule + approval + service-edge-graph detector ──▶ ex
 
 <h2>Verified outcomes</h2>
 <table><tr><th>Evidence</th><th>Result (Docker node:24.11.1, offline, read-only)</th></tr>
-<tr><td>Official toolkit validator · our tests</td><td>22/22 PASS · 61 tests PASS; <code>protected_read</code> decapsulated and proof verified with Python pqcrypto 0.4.0</td></tr>
-<tr><td>Revocation across 3 node processes</td><td>median 19 ms, max 21 ms to the last node enforcing; rotation cutoff and in-flight transfers PASS</td></tr>
+<tr><td>Official toolkit validator · our tests</td><td>22/22 PASS · 82 tests PASS; <code>protected_read</code> decapsulated and proof verified with Python pqcrypto 0.4.0</td></tr>
+<tr><td>Revocation across 3 node processes</td><td>shared disk: median 19 ms, max 21 ms; over HTTP with 20% loss, timed on the control plane: median 184 ms, partition heals in ~0.2 s; rotation cutoff, in-flight transfers PASS</td></tr>
 <tr><td>Detector, 10 seeds, standard + hard runs (120 incidents, ~6k benign events each)</td><td>F1 1.0 (standard and hard), median time-to-alert 1.1–1.6 s, 0 false alerts per 1,000 benign — an upper bound on synthetic data</td></tr>
-<tr><td>Attack Lab (12 real attacks) · self-defence</td><td>12/12 blocked with evidence; signed security alerts for probing, malformed floods, revoked-identity use, tampering</td></tr>
+<tr><td>Attack Lab (15 real attacks) · self-defence</td><td>15/15 blocked with evidence; signed security alerts for probing, malformed floods, revoked-identity use, tampering</td></tr>
 <tr><td>Latency</td><td>≈37 ms per request incl. process start (12 ms is bare Node)</td></tr></table>
 <p>All 12 goals mapped to tests and evidence in <code>docs/EVIDENCE.md</code>.</p>
 
@@ -69,11 +69,13 @@ access logs ──▶ rule + approval + service-edge-graph detector ──▶ ex
 <tr><td>Forged or edited log records</td><td>Hash chain + ML-DSA signatures; user text only as JSON fields</td><td>injection, edit, truncation tests</td><td>measured</td></tr>
 <tr><td>Crash mid-rotation</td><td>Single atomic commit; PID-checked lock recovery</td><td>kill before/after commit tests</td><td>measured</td></tr>
 <tr><td>Replay, re-addressing, MITM</td><td>AAD binding, duplicate refusal, signed transcript</td><td>messaging tests</td><td>measured</td></tr>
+<tr><td>Hide records: delete head, swap or delete log keys, race the lock</td><td>Head and keys mandatory; key hash pinned in MAC'd state; exclusive lock breaking</td><td>red-team regression tests (F1–F5)</td><td>measured</td></tr>
+<tr><td>Network attacker on policy or message wire; partition</td><td>Signed policy over HTTP; signed hybrid handshake + AEAD over TCP; 64 KB frames</td><td>network tests: forged policy, replay, bit flip, oversize, partition heal</td><td>measured (loopback)</td></tr>
 <tr><td>Privilege abuse, lateral movement</td><td>Explainable rules over approvals + service graph</td><td>detector metrics</td><td>partial (synthetic data, upper bound)</td></tr></table>
 <h2>Limits and remaining risks (honest scope)</h2>
 <ul><li><b>Largest risk:</b> full host compromise (keys + disk) allows decryption and a <i>consistent</i> rollback of state and log together; the rollback is now detected when the external witness is configured (TRACK4_WITNESS_DIR); key theft still needs an external KMS.</li>
-<li>No HSM; key erasure relies on Node process memory. Node clocks shared in the propagation measurement.</li>
-<li>Cluster transport is a shared filesystem; messaging is a tested library without network transport.</li>
+<li>No HSM; key erasure relies on Node process memory. Red-team findings F1–F5 fixed with regression tests.</li>
+<li>Policy (HTTP) and messages (TCP) cross real process boundaries on loopback; no TLS yet (signatures and the hybrid handshake carry security).</li>
 <li>Detector accuracy measured on public practice data and our synthetic generator (same documented environment) — not production traffic.</li>
 <li>Denial of service and side channels are out of scope.</li></ul>
 </body></html>

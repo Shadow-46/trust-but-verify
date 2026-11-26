@@ -148,22 +148,35 @@ that is the ML-DSA signature on the audit record and the signed log head). The
 TypeScript in `core/` is shipped pre-stripped in `dist/` (`npm run build`), which halves start-up
 compared with stripping types at runtime.
 
-## Known limitations (so far)
+## Closed since the red-team review
+- **Stale-lock race (F1) and Windows lock contention (F5):** a dead holder's lock is broken by exactly
+  one waiter (exclusive `.lock.break`, re-checked), and a holder only removes a lock carrying its own
+  random token. 4 rounds × 20 parallel requests over a dead-PID lock keep the chain valid.
+- **Fail-open log checks (F2, F3, F4):** after `setup`, a missing signed head, a missing or swapped
+  verification key (its SHA-256 is pinned inside the MAC'd state), a missing signing key, or a corrupt
+  log line all give `integrity_failure`; no record is ever written unsigned. Alerts raised while the
+  log is untrusted go to a signed side file, never into the log. Tests: `tests/redteam.test.ts`.
+- **Cluster restarts and bootstrap:** replay nonces and in-flight transfers persist per node; a
+  provisioned node (`trust.json`: anchor + epoch floor + policy hash) never trusts an older policy.
+- **Network transport:** policy is distributed over HTTP (`core/cluster/transport.ts`) and messages
+  travel over TCP between separate processes (`core/messaging/net.ts`); see
+  `npm run ops -- net-cluster-bench` and `npm run ops -- net-messaging`.
+
+## Known limitations
 - The master key lives on the same host as the data unless `TRACK4_MASTER_KEY` is supplied by an
-  external KMS; an attacker with full host access and the key file can decrypt.
+  external KMS; an attacker with full host access and the key file can decrypt. No HSM.
 - `setup` is a trusted operator operation and resets all state.
-- Rolling back state and log together is detected only when the external witness is configured (TRACK4_WITNESS_DIR); without it, a host attacker could restore an older consistent copy. The audit signing key lives on the same host as the log.
+- Rolling back state and log together is detected only when the external witness is configured
+  (`TRACK4_WITNESS_DIR`); the audit signing key lives on the same host as the log.
 - A reused `request_id` is only honoured as an identical retry of an earlier allow; any other reuse
   is denied without content.
-- Cluster demo: node processes sync policy over a shared filesystem (no network listener); requests
-  are authorized against each node's own stored, re-verified policy. Replay nonces and the in-flight
-  transfer table are in memory and are lost when a node restarts.
-- A brand-new node accepts any genuinely signed policy as its first one (no freshness bound yet).
-- Messaging is a library with tests (no network transport); a resumed session reuses the original
-  session secret chain, so its forward secrecy relies on the resume secret being erased on close.
+- The network transports run over plain HTTP/TCP on loopback in the demo: integrity and
+  confidentiality come from ML-DSA signatures and the hybrid handshake, not from TLS; mutual TLS
+  and multi-host deployment are the next step. A node directory writable by an attacker can still
+  lose its replay file (replays then stay bounded by the ±30 s timestamp window).
+- Messaging forward secrecy and resumption rely on Node.js erasing secrets in memory.
 - The judged adapter identifies actors by ID only; per-device signatures exist in the cluster layer.
-- A request killed while holding the state lock is detected by PID and its lock is broken
-  immediately; a live but hung holder is broken after 3 s.
+- Denial of service and side channels are out of scope.
 
 ## Layout
 | Path | What |

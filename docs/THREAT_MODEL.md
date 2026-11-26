@@ -46,11 +46,17 @@ readable only by the service user (0600/0700) or the master key comes from a KMS
 | Crash mid-operation | Single atomic commit, PID-based lock recovery | crash tests |
 | Message replay / re-addressing / MITM | AAD binding, duplicate refusal, signed transcript | messaging tests |
 | Unexpected privilege change / lateral movement | Explainable rules over approvals + service-edge graph | detector tests (goals 6–8) |
+| Delete the log head or swap/delete the log keys to hide records | Head and key mandatory after setup; key hash pinned in MAC'd state; never write unsigned | red-team regression tests (F2–F4) |
+| Concurrent requests racing a dead holder's lock | Exclusive, re-checked lock breaking; own-token unlock | 4 × 20 parallel requests test (F1/F5) |
+| Node restart used to replay a request or drop a transfer | Nonces and transfers persisted per node | cluster-hardening tests |
+| New node fed an old, genuinely signed policy | Provisioned epoch floor + policy hash (`trust.json`) | cluster-hardening tests |
+| Network attacker on the policy or message wire | ML-DSA-signed policy over HTTP; signed hybrid handshake + AEAD over TCP; 64 KB frame cap | network tests (forged policy, replay, bit flip, oversize, partition) |
 
 ## Exclusions and remaining risks
 - **Largest risk:** an attacker with full control of the host (keys + disk) can decrypt and can
   roll back state *and* log consistently unless the external witness is configured (implemented, TRACK4_WITNESS_DIR); master-key theft still needs an external KMS.
 - No HSM; key erasure relies on process memory hygiene in Node.
-- Cluster transport is a shared filesystem in the prototype; messaging has no network transport.
+- Network transports are plain HTTP/TCP on loopback in the prototype (security comes from signatures
+  and the hybrid handshake, not TLS); multi-host deployment with mutual TLS is the next step.
 - Detector accuracy is measured only on public practice data and our synthetic set, not production traffic.
 - Denial of service and side channels (timing, power) are out of scope.

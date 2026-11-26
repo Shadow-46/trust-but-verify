@@ -25,15 +25,32 @@ Reproduce: `npm test`, `bash tools/judge-parity.sh <Track-4-Toolkit>`, `python t
 `read` ≈ 37 ms per request including Node process start (bare Node ≈ 12 ms), native Linux filesystem.
 Revocation propagation: see goal 2.
 
+## Network transport (real processes, loopback)
+| Evidence | Result |
+|---|---|
+| `npm run ops -- net-cluster-bench`, `tests/network.test.ts` | Signed policy served over HTTP to 3 node processes, measured on the **control plane's clock** (no shared-clock assumption; includes up to two 50 ms poll intervals). 10 policy changes: clean link median 129 ms / max 149 ms; through a proxy dropping 20% of requests + 10 ms latency median 184 ms / max 342 ms. Partition: no node adopts while cut off, all keep enforcing their last verified policy, catch-up 201 ms after the link heals. A policy signed by another key served over the same wire is refused (`bad_signature`). |
+| `npm run ops -- net-messaging`, `tests/network.test.ts` | bob in a separate OS process, alice connects over TCP: hybrid handshake, message delivered; replaying a recorded frame (`duplicate_message`), flipping one ciphertext bit (`authentication_failed`) and a 70 KB frame (`frame_too_large`, connection closed) refused. |
+| `tests/cluster-hardening.test.ts` | A replayed request is still refused after a node restart; an in-flight transfer survives a restart; a provisioned node refuses a genuinely signed policy older than its epoch floor (`below_floor`). |
+
+## Red-team findings (team review) — closed
+| Finding | Fix | Regression test |
+|---|---|---|
+| F1 High: stale-lock race forks the audit chain | Exclusive lock breaking with re-check; own-token unlock | `tests/redteam.test.ts` (4 × 20 parallel over a dead-PID lock) |
+| F2 Medium: head check fails open | Missing head or key ⇒ `integrity_failure`; key hash pinned in MAC'd state | delete head + truncate, delete or swap key |
+| F3 Medium: unsigned records if signing key missing | Fail closed; never write unsigned | delete `audit.key` |
+| F4 Low: corrupt line ⇒ `internal_error` | Reported as `integrity_failure` | corrupt line |
+| F5 Windows: parallel lock contention | `EPERM`/`EACCES` on lock open = busy, retry | same burst test on Windows |
+
 ## Known limitations
 See README "Known limitations": master key and audit signing key share the host (KMS env var
-supported); consistent rollback of state **and** log together needs an external witness; cluster
-transport is a shared filesystem; messaging is a tested library without network transport.
+supported, no HSM); consistent rollback of state **and** log together needs the external witness;
+network transports are plain HTTP/TCP on loopback (security from signatures and the hybrid
+handshake, not TLS); secret erasure relies on Node.js memory; detector numbers are synthetic.
 
 ## Live security assessment readiness
 | Evidence | Result |
 |---|---|
-| Attack Lab: `npm run ops -- attack all`, `tests/attacks.test.ts` | 12/12 real attacks blocked (stolen device key, replay, forged policy, policy rollback, state rollback, consistent state+log rollback with witness, log edit, log injection, `__proto__`/path traversal, malformed flood, probing, protected_read abuse) |
+| Attack Lab: `npm run ops -- attack all`, `tests/attacks.test.ts` | 15/15 real attacks blocked (stolen device key, replay, forged policy, policy rollback, state rollback, consistent state+log rollback with witness, log edit, log truncation with head deleted, verification-key swap, signing-key deletion, log injection, `__proto__`/path traversal, malformed flood, probing, protected_read abuse) |
 | Self-defence: `tests/defense.test.ts` | Signed `security_alert` records for probing, malformed bursts, revoked-identity use, request-ID reuse, integrity failures; opt-in quarantine (`TRACK4_AUTO_QUARANTINE=1`) |
 | External witness: `tests/witness.test.ts` | Consistent rollback of state and log detected with `TRACK4_WITNESS_DIR`; undetected without it (documented limitation) |
 | Messaging run: `npm run ops -- messaging` | Conversation delivered out of order; replay, re-addressing, tampering, sequence change, session hijack and stolen-identity-key decryption all rejected |
