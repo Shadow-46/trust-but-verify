@@ -109,8 +109,18 @@ export function appendDurable(path: string, line: string): void {
 }
 
 export function readTextIfExists(path: string): string | undefined {
-  if (!existsSync(path)) return undefined;
-  return readFileSync(path, "utf8");
+  // On Windows a read can briefly fail while another process atomically replaces the file.
+  for (let attempt = 0; ; attempt++) {
+    if (!existsSync(path)) return undefined;
+    try {
+      return readFileSync(path, "utf8");
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code;
+      if (code === "ENOENT") return undefined;
+      if (attempt >= 250 || (code !== "EPERM" && code !== "EACCES" && code !== "EBUSY")) throw err;
+      sleepMs(4);
+    }
+  }
 }
 
 const sleepCell = new Int32Array(new SharedArrayBuffer(4));
