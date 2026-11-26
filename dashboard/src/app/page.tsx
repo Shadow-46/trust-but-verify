@@ -127,6 +127,40 @@ export default function Console() {
   const [results, setResults] = useState<({ pass: boolean; actual: string } | null)[]>([]);
   const [touring, setTouring] = useState(false);
   const [attacks, setAttacks] = useState<any[]>([]);
+  const [live, setLive] = useState<any>(null);
+  const [ripple, setRipple] = useState<string | null>(null);
+  const pollCluster = useCallback(async () => {
+    const r = await api("cluster-status");
+    setLive(r.ok && r.out?.ready ? { ...r.out, running: (r as any).running } : null);
+    return r;
+  }, []);
+  const startCluster = async () => {
+    setRipple(null);
+    await run("cluster-start");
+    for (let i = 0; i < 40; i++) {
+      const r = await pollCluster();
+      if (r.out?.ready && r.out.nodes.every((n: any) => n.epoch >= r.out.published_epoch)) break;
+      await new Promise((res) => setTimeout(res, 100));
+    }
+  };
+  const revokeLive = async () => {
+    const r = await api("cluster-revoke");
+    const target = r.out?.epoch ?? 0;
+    const t0: number = r.out?.at ?? 0; // revocation time recorded by the control plane
+    for (let i = 0; i < 80; i++) {
+      const s = await pollCluster();
+      const running = s.out?.nodes?.filter((n: any) => (s as any).running?.[n.name]) ?? [];
+      if (running.length && running.every((n: any) => n.epoch >= target)) {
+        const ms = Math.max(...running.map((n: any) => n.adopted_at)) - t0;
+        const msg = `Revoked on ${running.length} running node${running.length > 1 ? "s" : ""} in ${ms} ms`;
+        setRipple(msg);
+        return msg;
+      }
+      await new Promise((res) => setTimeout(res, 40));
+    }
+    setRipple("Some nodes have not caught up yet");
+    return null;
+  };
   const [attackResults, setAttackResults] = useState<Record<string, any>>({});
   const runAttacks = async (id: string) => {
     const r = await run("attack", { id });
@@ -222,6 +256,7 @@ export default function Console() {
     { section: "audit", target: "audit", title: "A tamper-evident trail", body: "Every allow and every block is hash-chained and signed with ML-DSA-65. Anyone with the public key can verify it.", run: async () => { const r = await run("verify"); setVerify(r.out); return r.out?.ok ? ok(`Log verified: ${r.out.records} records, all signatures valid`) : bad("Log verification failed"); } },
     { section: "keys", target: "keys", title: "Rotating the data key", body: "A new key version re-encrypts every file in one atomic step. The old version is retired.", run: async () => { const r = await run("rotate"); return r.ok ? ok(`Rotated v${r.out.from} to v${r.out.to}, ${r.out.reencrypted} files re-encrypted`) : bad("Rotation refused"); } },
     { section: "lab", target: "lab", title: "Judges try to break it", body: "The Attack Lab launches twelve real attacks: stolen device, replay, forged and rolled-back policy, state and log rollback, log tampering and injection, prototype pollution, malformed floods, probing, protected-read abuse.", run: async () => { const res = await runAttacks("all"); const blocked = res.filter((x: any) => x.blocked).length; return blocked === res.length ? ok(`${blocked} of ${res.length} attacks blocked, each with evidence`) : bad(`${blocked} of ${res.length} blocked`); }, dwell: 9000 },
+    { section: "nodes", target: "live-cluster", title: "Watch a revocation ripple", body: "Three real node processes each verify the ML-DSA-signed policy. We report maya's phone lost and watch every node switch from allow to deny.", run: async () => { await startCluster(); const msg = await revokeLive(); return msg ? ok(msg) : bad("Nodes did not converge"); }, dwell: 8000 },
     { section: "nodes", target: "nodes-stats", title: "Revocation reaches every node", body: "Three separate node processes pull an ML-DSA-signed, epoch-versioned policy and refuse forged or older versions.", run: async () => (ev?.cluster ? ok(`Median ${ev.cluster.revocation_propagation_ms.median} ms, worst case ${ev.cluster.revocation_propagation_ms.max} ms`) : undefined) },
     { section: "nodes", target: "nodes-checks", title: "Rotation with a documented cutoff", body: "The old key is accepted until the cutoff, then rejected everywhere, while transfers that already started finish.", dwell: 6000 },
     { section: "alerts", target: "alerts", title: "Catching misuse of valid credentials", body: "An explainable detector (rules, approvals and a service graph, no ML) analyses a fresh access log with hidden incidents.", run: async () => { const r = await run("detect", { seed: freshSeed() }); setDet(r.out); return r.out?.alerts ? ok(`${r.out.alerts.length} alerts for ${r.out.incidents.length} hidden incidents`) : bad("Analysis failed"); }, dwell: 8000 },
@@ -451,6 +486,51 @@ export default function Console() {
                 </tbody>
               </table>
               <p className="border-t border-[#E3E5E8] px-4 py-3 text-xs text-[#5C6370]">Keys are wrapped by a key-encryption key and never leave the service. Rotation re-encrypts every file in one atomic step.</p>
+            </Panel>
+          )}
+
+          {section === "nodes" && (
+            <Panel
+              tour="live-cluster"
+              title="Live cluster"
+              action={
+                <div className="flex gap-2">
+                  <Button size="sm" variant="outline" disabled={busy} onClick={startCluster}>{live ? "Restart cluster" : "Start cluster"}</Button>
+                  <Button size="sm" variant="outline" disabled={busy || !live} onClick={async () => { await api("cluster-enrol"); setRipple(null); await pollCluster(); }}>Enrol new phone</Button>
+                  <Button size="sm" className={primary} disabled={busy || !live} onClick={revokeLive}>Report maya&apos;s phone lost</Button>
+                </div>
+              }
+            >
+              {!live && <p className="px-4 py-8 text-center text-sm text-[#5C6370]">Start the cluster to launch three node processes that enforce the signed policy.</p>}
+              {live && (
+                <>
+                  <div className="grid gap-3 p-4 md:grid-cols-3">
+                    {live.nodes.map((n: any) => {
+                      const running = live.running?.[n.name];
+                      const allowed = n.decision === "allow";
+                      return (
+                        <motion.div key={n.name} layout className={`rounded-lg border p-3 text-sm ${running ? "border-[#E3E5E8]" : "border-dashed border-[#CBD0D6] bg-[#FBFBFC]"}`}>
+                          <div className="flex items-center justify-between">
+                            <span className="font-medium">{n.name}</span>
+                            <span className="inline-flex items-center gap-1.5 text-xs text-[#5C6370]"><span className={`size-1.5 rounded-full ${running ? "bg-[#0F7B4F]" : "bg-[#AEB4BD]"}`} />{running ? "Running" : "Stopped"}</span>
+                          </div>
+                          <motion.div key={n.epoch} initial={{ backgroundColor: "#EEF2FF" }} animate={{ backgroundColor: "rgba(255,255,255,0)" }} transition={{ duration: 1.2 }} className="mt-2 rounded px-1 font-mono text-xs text-[#5C6370]">policy epoch {n.epoch}</motion.div>
+                          <motion.div key={n.decision} initial={{ scale: 0.96, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} className={`mt-2 rounded-md px-2 py-1.5 ${allowed ? "bg-[#E7F5EE] text-[#0F7B4F]" : "bg-[#FDECEA] text-[#B42318]"}`}>
+                            maya&apos;s phone: {allowed ? "Allowed" : "Denied"} <span className="text-xs opacity-80">({n.reason.replace(/_/g, " ")})</span>
+                          </motion.div>
+                          <div className="mt-2">
+                            <Button size="sm" variant="ghost" disabled={busy} onClick={async () => { await api(running ? "cluster-stop" : "cluster-restart", { node: n.name }); await new Promise((r) => setTimeout(r, 300)); await pollCluster(); }}>{running ? "Stop node" : "Restart node"}</Button>
+                          </div>
+                        </motion.div>
+                      );
+                    })}
+                  </div>
+                  <div className="flex items-center justify-between border-t border-[#E3E5E8] px-4 py-2.5 text-xs text-[#5C6370]">
+                    <span>Published policy epoch {live.published_epoch}, device {live.device}</span>
+                    {ripple && <motion.span initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="font-medium text-[#14171C]">{ripple}</motion.span>}
+                  </div>
+                </>
+              )}
             </Panel>
           )}
 
