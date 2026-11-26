@@ -124,6 +124,7 @@ export default function Console() {
   const [filter, setFilter] = useState<"all" | "allow" | "deny">("all");
   const [confirm, setConfirm] = useState<null | { kind: "revoke"; user: string } | { kind: "rotate" }>(null);
   const [det, setDet] = useState<any>(null);
+  const [svcAlerts, setSvcAlerts] = useState<any[]>([]);
   const [scenarioOpen, setScenarioOpen] = useState(false);
   const [results, setResults] = useState<({ pass: boolean; actual: string } | null)[]>([]);
   const [touring, setTouring] = useState(false);
@@ -179,7 +180,8 @@ export default function Console() {
   };
 
   const refresh = useCallback(async () => {
-    const [l, s] = await Promise.all([api("log"), api("state")]);
+    const [l, s, a] = await Promise.all([api("log"), api("state"), api("alerts")]);
+    setSvcAlerts(Array.isArray(a.out) ? [...a.out].reverse().slice(0, 8) : []);
     setLog(Array.isArray(l.out) ? [...l.out].reverse() : []);
     setState(s.ok ? s.out : null);
     setFailClosed(!s.ok && s.out?.error === "integrity_failure");
@@ -706,6 +708,20 @@ export default function Console() {
                     <li className="bg-[#FBFBFC] px-4 py-2.5 text-xs text-[#5C6370]">
                       {det.alerts.length} alerts for {det.incidents.length} hidden incidents ({det.incidents.map((i: any) => i.kind.replace(/_/g, " ")).join(", ")}). The detector never sees these labels.
                     </li>
+                  </ul>
+                )}
+              </Panel>
+              <Panel title="Raised by the service itself">
+                {!svcAlerts.length && <p className="px-4 py-6 text-center text-sm text-[#5C6370]">No self-defence alerts yet. Probing, a revoked identity in use, replayed request IDs, tampering or malformed floods raise one.</p>}
+                {!!svcAlerts.length && (
+                  <ul>
+                    {svcAlerts.map((a: any) => (
+                      <li key={`${a.ts}-${a.rule}`} className="border-b border-[#EEF0F2] px-4 py-3 text-sm last:border-b-0">
+                        <div className="font-medium text-[#B42318]">{String(a.rule).replace(/_/g, " ")}</div>
+                        <p className="mt-0.5 text-[#3A404A]">{a.detail}</p>
+                        <p className="mt-1 font-mono text-xs text-[#5C6370]">identity {a.identity} · service {a.service} · event {a.events}{a.seq ? ` · audit #${a.seq}` : " · signed side log"}</p>
+                      </li>
+                    ))}
                   </ul>
                 )}
               </Panel>

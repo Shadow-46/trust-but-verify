@@ -118,7 +118,7 @@ function authorizeAndRecord(
     },
     records,
   );
-  observeDecision(paths, actor, asset, decision.decision, decision.reason);
+  observeDecision(paths, actor, asset, decision.decision, decision.reason, requestId);
   return decision.decision === "allow" ? { decision, body } : { decision };
 }
 

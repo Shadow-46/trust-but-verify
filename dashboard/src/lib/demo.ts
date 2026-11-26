@@ -56,7 +56,11 @@ export function describe(r: Row): { text: string; tone: "good" | "bad" | "warn" 
       return { text: `Replayed request ID from ${who} refused`, tone: "bad" };
     case "security_alert": {
       const [rule, ...rest] = (r.reason ?? "").split(": ");
-      return { text: `${ruleLabel(rule)}${r.actor ? ` (${r.actor})` : ""}: ${rest.join(": ")}`, tone: "bad" };
+      // "identity=… service=… events=… [seq=n] — detail" (older records: just the detail)
+      const m = /^identity=(.*) service=(.*?) events=(.*?)(?: seq=(d+))? — ([sS]*)$/.exec(rest.join(": "));
+      return m
+        ? { text: `${ruleLabel(rule)}: ${m[5]} (identity ${m[1]}, ${m[2]}, event ${m[3]}${m[4] ? `, audit #${m[4]}` : ""})`, tone: "bad" }
+        : { text: `${ruleLabel(rule)}${r.actor ? ` (${r.actor})` : ""}: ${rest.join(": ")}`, tone: "bad" };
     }
     default:
       return { text: r.type.replace(/_/g, " "), tone: "neutral" };

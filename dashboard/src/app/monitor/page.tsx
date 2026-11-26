@@ -159,8 +159,9 @@ export default function Monitor() {
               <AnimatePresence initial={false}>
                 {alerts.map((a) => (
                   <motion.li key={`${a.ts}-${a.rule}`} layout initial={{ opacity: 0, x: 12 }} animate={{ opacity: 1, x: 0 }} className="border-b border-[#EEF0F2] px-5 py-2.5 text-sm last:border-b-0">
-                    <div className="font-medium text-[#B42318]">{ruleLabel(a.rule)}{a.actor ? ` · ${a.actor}` : ""}</div>
+                    <div className="font-medium text-[#B42318]">{ruleLabel(a.rule)}</div>
                     <div className="text-[#3A404A]">{a.detail}</div>
+                    <div className="mt-0.5 text-xs text-[#3A404A]"><span className="text-[#5C6370]">identity</span> {a.identity ?? a.actor ?? "unauthenticated caller"} · <span className="text-[#5C6370]">service</span> {a.service ?? "file-service adapter"} · <span className="text-[#5C6370]">event</span> {a.events ?? "-"}</div>
                     <div className="font-mono text-[11px] text-[#5C6370]">{time(a.ts)}{a.seq ? ` · audit #${a.seq}` : " · signed side log"}</div>
                   </motion.li>
                 ))}
