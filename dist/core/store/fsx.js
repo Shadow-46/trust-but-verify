@@ -102,13 +102,30 @@ function sleepMs(ms        )       {
   Atomics.wait(sleepCell, 0, 0, ms);
 }
 
-const LOCK_WAIT_MS = 10_000;
-const LOCK_STALE_MS = 30_000;
+// A request holds the lock for a few milliseconds. Keep the total wait well
+// under the judge's 8 s per-operation timeout.
+const LOCK_WAIT_MS = 6_000;
+// A live holder that keeps the lock this long is treated as hung.
+const LOCK_STALE_MS = 3_000;
+
+function holderIsDead(lockPath        )          {
+  try {
+    const pid = Number.parseInt(readFileSync(lockPath, "utf8").split(" ")[0] ?? "", 10);
+    if (!Number.isInteger(pid) || pid <= 0) return false; // still being written; use the age rule
+    if (pid === process.pid) return false;
+    process.kill(pid, 0); // signal 0 = existence check only
+    return false;
+  } catch (err) {
+    return (err                         ).code === "ESRCH";
+  }
+}
 
 /**
  * Cross-process mutual exclusion. The judge starts one process per request, so
  * concurrent requests must not interleave read-modify-write cycles on state.
- * A lock older than LOCK_STALE_MS is assumed abandoned by a crashed process.
+ * The lock file records the holder's PID: a lock whose holder has exited (for
+ * example a request killed mid-way) is broken immediately, and one held longer
+ * than LOCK_STALE_MS is broken as hung.
  */
 export function withLock   (dir        , fn         )    {
   ensurePrivateDir(dir);
@@ -118,10 +135,11 @@ export function withLock   (dir        , fn         )    {
   while (fd === undefined) {
     try {
       fd = openSync(lockPath, "wx", FILE_MODE);
+      writeSync(fd, Buffer.from(`${process.pid} ${Date.now()}`, "utf8"));
     } catch (err) {
       if ((err                         ).code !== "EEXIST") throw err;
       try {
-        if (Date.now() - statSync(lockPath).mtimeMs > LOCK_STALE_MS) {
+        if (holderIsDead(lockPath) || Date.now() - statSync(lockPath).mtimeMs > LOCK_STALE_MS) {
           unlinkSync(lockPath);
           continue;
         }
