@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { ControlPlane } from "../cluster/control.js";
 import { ClusterNode, signRequest } from "../cluster/node.js";
 import { generateSigningKeyPair } from "../crypto/sign.js";
-import { atomicWriteFile } from "../store/fsx.js";
+import { appendDurable, atomicWriteFile, readTextIfExists } from "../store/fsx.js";
 
 /**
  * Live cluster demo state on disk, driven by the operator console. The node
@@ -50,7 +50,43 @@ export function clusterStatus(dir        ) {
     const decision = view.authorize(req);
     return { name, epoch: ack.epoch, adopted_at: ack.adopted_at, decision: decision.decision, reason: decision.reason };
   });
-  return { ready: true, published_epoch: cp.policy.epoch, published_at: cp.policy.issued_at, device: d.device_id, nodes };
+  return { ready: true, published_epoch: cp.policy.epoch, published_at: cp.policy.issued_at, device: d.device_id, nodes, control: controlView(dir), attempts: recentAttempts(dir) };
+}
+
+/** What the control plane itself observed over the network (its own clock) and which links are cut. */
+function controlView(dir        ) {
+  const read = (f        ) => {
+    try {
+      return JSON.parse(readTextIfExists(join(dir, "control", f)) ?? "null")           ;
+    } catch {
+      return null;
+    }
+  };
+  const acks = read("acks.json")                                                                                                                            ;
+  const blocked = read("blocked.json");
+  return { transport: acks?.port ? "http" : "file", acks: acks?.acks ?? {}, last_seen: acks?.last_seen ?? {}, observed_at: acks?.at ?? null, blocked: Array.isArray(blocked) ? blocked : [] };
+}
+
+/** A device request that reached a node (e.g. from the Attack Lab), for the network map. */
+                                                                                                                    
+
+export function recordAttempt(dir        , a         )       {
+  appendDurable(join(dir, "attempts.jsonl"), JSON.stringify(a));
+}
+
+function recentAttempts(dir        )            {
+  const text = readTextIfExists(join(dir, "attempts.jsonl")) ?? "";
+  return text
+    .split("\n")
+    .filter((l) => l.length > 0)
+    .slice(-12)
+    .flatMap((l) => {
+      try {
+        return [JSON.parse(l)           ];
+      } catch {
+        return [];
+      }
+    });
 }
 
 export function clusterRevoke(dir        ) {

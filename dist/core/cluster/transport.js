@@ -28,7 +28,14 @@ export const MAX_POLICY_BYTES = 1 << 20;
 
 const NODE_NAME = /^[A-Za-z0-9._-]{1,64}$/;
 
-export function servePolicy(controlDir        , port = 0, host = "127.0.0.1")                        {
+                            
+                                                                                       
+                                        
+                                                                                    
+                                                             
+  
+
+export function servePolicy(controlDir        , port = 0, host = "127.0.0.1", opts               = {})                        {
   const published = controlPaths(controlDir).published;
   const acks = new Map                             ();
   const server = createServer((req                 , res                ) => {
@@ -37,11 +44,17 @@ export function servePolicy(controlDir        , port = 0, host = "127.0.0.1")   
       return;
     }
     const name = String(req.headers["x-node"] ?? "");
+    if (opts.isBlocked?.(name)) {
+      req.socket.destroy();
+      return;
+    }
     const epoch = Number(req.headers["x-epoch"] ?? "NaN");
     if (NODE_NAME.test(name) && Number.isSafeInteger(epoch) && epoch >= 0) {
       const seen = acks.get(name) ?? new Map                ();
-      if (!seen.has(epoch)) seen.set(epoch, Date.now());
+      const now = Date.now();
+      if (!seen.has(epoch)) seen.set(epoch, now);
       acks.set(name, seen);
+      opts.onPoll?.(name, epoch, now);
     }
     const text = readTextIfExists(published);
     if (!text) {

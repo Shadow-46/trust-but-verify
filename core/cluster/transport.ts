@@ -27,7 +27,14 @@ export type PolicyServer = {
 
 const NODE_NAME = /^[A-Za-z0-9._-]{1,64}$/;
 
-export function servePolicy(controlDir: string, port = 0, host = "127.0.0.1"): Promise<PolicyServer> {
+export type ServeOptions = {
+  /** Simulated partition: requests from these nodes are dropped (connection reset). */
+  isBlocked?: (node: string) => boolean;
+  /** Called on every accepted poll (node, epoch it reports, control-plane time). */
+  onPoll?: (node: string, epoch: number, at: number) => void;
+};
+
+export function servePolicy(controlDir: string, port = 0, host = "127.0.0.1", opts: ServeOptions = {}): Promise<PolicyServer> {
   const published = controlPaths(controlDir).published;
   const acks = new Map<string, Map<number, number>>();
   const server = createServer((req: IncomingMessage, res: ServerResponse) => {
@@ -36,11 +43,17 @@ export function servePolicy(controlDir: string, port = 0, host = "127.0.0.1"): P
       return;
     }
     const name = String(req.headers["x-node"] ?? "");
+    if (opts.isBlocked?.(name)) {
+      req.socket.destroy();
+      return;
+    }
     const epoch = Number(req.headers["x-epoch"] ?? "NaN");
     if (NODE_NAME.test(name) && Number.isSafeInteger(epoch) && epoch >= 0) {
       const seen = acks.get(name) ?? new Map<number, number>();
-      if (!seen.has(epoch)) seen.set(epoch, Date.now());
+      const now = Date.now();
+      if (!seen.has(epoch)) seen.set(epoch, now);
       acks.set(name, seen);
+      opts.onPoll?.(name, epoch, now);
     }
     const text = readTextIfExists(published);
     if (!text) {

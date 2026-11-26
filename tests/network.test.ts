@@ -48,3 +48,35 @@ test("messaging over TCP between two processes: delivered; wire replay, tamperin
   assert.equal(r.delivered, true);
   for (const a of r.attacks) assert.ok(a.blocked, `${a.name}: ${a.evidence}`);
 });
+
+test("policy server process: serves nodes, records acks on its own clock, drops a partitioned node", { timeout: 30_000 }, async () => {
+  const { spawn } = await import("node:child_process");
+  const { readFileSync, writeFileSync } = await import("node:fs");
+  const base = freshStateDir();
+  const cp = ControlPlane.create(join(base, "control"));
+  const proc = spawn(process.execPath, [join(import.meta.dirname, "..", "core", "cluster", "policyServerProcess.ts"), cp.paths.dir], { stdio: ["ignore", "pipe", "ignore"] });
+  try {
+    const port = await new Promise<number>((resolve, reject) => {
+      const t = setTimeout(() => reject(new Error("no ready line")), 10_000);
+      proc.stdout!.on("data", (d: Buffer) => {
+        const m = /ready (\d+)/.exec(d.toString());
+        if (m) {
+          clearTimeout(t);
+          resolve(Number(m[1]));
+        }
+      });
+    });
+    const get = (node: string) => fetch(`http://127.0.0.1:${port}/policy`, { headers: { "x-node": node, "x-epoch": "0" } }).then((r) => r.status, () => "reset");
+    assert.equal(await get("node-a"), 200);
+    writeFileSync(join(cp.paths.dir, "blocked.json"), JSON.stringify(["node-a"]));
+    await new Promise((r) => setTimeout(r, 250));
+    assert.equal(await get("node-a"), "reset", "partitioned node is cut off");
+    assert.equal(await get("node-b"), 200, "other nodes still served");
+    await new Promise((r) => setTimeout(r, 250));
+    const acks = JSON.parse(readFileSync(join(cp.paths.dir, "acks.json"), "utf8"));
+    assert.equal(typeof acks.acks["node-a"]["0"], "number");
+    assert.equal(acks.port, port);
+  } finally {
+    proc.kill();
+  }
+});
