@@ -1,6 +1,6 @@
 import { spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { copyFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
@@ -44,7 +44,9 @@ function run(args: string[], input?: unknown) {
   } catch {
     out = { error: "no_output" };
   }
-  return { ok: r.status === 0, out, ms: Math.round(performance.now() - started) };
+  // A fail-closed integrity refusal is the defence working, not a crash: flag it for the UI.
+  const blocked = (out as { error?: string } | null)?.error === "integrity_failure";
+  return { ok: r.status === 0, out, blocked, ms: Math.round(performance.now() - started) };
 }
 
 const adapter = (req: unknown) => run([join(ROOT, "track4_service.mjs")], req);
@@ -63,6 +65,9 @@ export async function POST(request: Request) {
   };
   try {
     switch (body.action) {
+      case "reset":
+        rmSync(SNAPSHOT, { force: true });
+        return Response.json(adapter({ ...DEMO, key_material: `synthetic-${randomBytes(8).toString("hex")}` }));
       case "setup":
         return Response.json(adapter({ ...DEMO, key_material: `synthetic-${randomBytes(8).toString("hex")}` }));
       case "read":
