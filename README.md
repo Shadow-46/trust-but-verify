@@ -136,10 +136,28 @@ cd dashboard && npm install && npm run dev     # http://localhost:3000
 ```
 Runs the real adapter and ops CLI (whitelisted actions only, state in `<os temp>/tbv-dashboard`): lost-device flow with the signed decision trail and a reason for every allow/deny; log verification, key rotation and a live rollback attack that fails closed; cluster propagation evidence; detector metrics and explained alerts on a fresh synthetic log.
 
+Three views, built for a two-laptop demo:
+- **Console** (`/`): guided walkthrough and checklist (both kept server-side, so a refresh or a second
+  screen sees the same session); the **Nodes** page is an interactive network map of the live cluster:
+  three node processes pull the signed policy from the control plane over HTTP; drag nodes, click one to
+  cut or restore its link or stop it, and watch signed updates travel and nodes switch allow/deny.
+- **Attack Lab** (`/lab`, laptop A): 8 storyboards attack the *running* service one real step per key
+  press (stolen phone, replay, forged policy, rolling back the disk, cutting the log and swapping its
+  key, probing → quarantine, injection and `__proto__`, protected_read abuse), each showing the checks in
+  the order the code runs them and the evidence; destructive ones end by recovering from a signed
+  backup. 5 more replay sandboxed attacks. `npm run ops -- lab-catalog | lab-start <id> | lab-step <run>`.
+- **Live Monitor** (`/monitor`, laptop B): read-only big screen: live/fail-closed status, the signed
+  audit log in plain language as it lands, security alerts, the network map and the current Lab step.
+
+Two laptops: the console binds to 127.0.0.1 only. On laptop A run `npm run dev` (or `npm run build &&
+npm run start`) and `npm run lan`; laptop B opens the printed `http://<laptop-A-IP>:3001/monitor`
+(allow Node through the firewall on a private network). The LAN gateway forwards pages and read-only
+actions and refuses every state-changing action, so nobody else on the Wi-Fi can drive the demo.
+
 ## Self-defence, witness and Attack Lab
 - **Detect and respond** (core/defense/guard.ts): the service watches its own traffic and writes ML-DSA-signed security_alert records for probing (one identity denied on 3+ files in 60 s), malformed-input bursts, use of a revoked identity, request-ID reuse and integrity failures (npm run ops -- alerts). With TRACK4_AUTO_QUARANTINE=1 a probing identity is also quarantined; this is off by default because actor IDs in the judged interface are caller-supplied, so automatic lockout could be abused to lock out a real user.
 - **External witness** (core/audit/witness.ts): with TRACK4_WITNESS_DIR set, every signed audit-log head is mirrored to a location the service host does not control; rolling back state and log together is then detected and refused.
-- **Attack Lab** (npm run ops -- attack all, and the console page): 12 real attacks (stolen device key, replay, forged and rolled-back policy, state rollback, consistent state+log rollback, log edit, log injection, prototype pollution and path traversal, malformed flood, probing, protected_read abuse) run against fresh instances; all are blocked, with evidence. A regression test keeps it that way.
+- **Attack scorecard** (npm run ops -- attack all, and the console page): 15 real attacks (stolen device key, replay, forged and rolled-back policy, state rollback, consistent state+log rollback, log edit, truncation with the head deleted, verification-key swap, signing-key deletion, log injection, prototype pollution and path traversal, malformed flood, probing, protected_read abuse) run against fresh instances; all are blocked, with evidence. The live Attack Lab (below) runs 8 of them against the running service. Regression tests keep both that way.
 
 ## Performance
 One request = one Node process. Measured in Docker `node:24.11.1` on a native filesystem:

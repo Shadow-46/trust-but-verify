@@ -35,7 +35,7 @@ access logs ──▶ rule + approval + service-edge-graph detector ──▶ ex
 <tr><td>Official toolkit validator · our tests</td><td>22/22 PASS · 82 tests PASS; <code>protected_read</code> decapsulated and proof verified with Python pqcrypto 0.4.0</td></tr>
 <tr><td>Revocation across 3 node processes</td><td>shared disk: median 19 ms, max 21 ms; over HTTP with 20% loss, timed on the control plane: median 184 ms, partition heals in ~0.2 s; rotation cutoff, in-flight transfers PASS</td></tr>
 <tr><td>Detector, 10 seeds, standard + hard runs (120 incidents, ~6k benign events each)</td><td>F1 1.0 (standard and hard), median time-to-alert 1.1–1.6 s, 0 false alerts per 1,000 benign — an upper bound on synthetic data</td></tr>
-<tr><td>Attack Lab (15 real attacks) · self-defence</td><td>15/15 blocked with evidence; signed security alerts for probing, malformed floods, revoked-identity use, tampering</td></tr>
+<tr><td>Attack Lab (15 real attacks) · self-defence</td><td>15/15 blocked with evidence; 8 replayed live, step by step, against the running service with recovery (Live Monitor on a second screen); signed security alerts for probing, malformed floods, revoked-identity use, tampering</td></tr>
 <tr><td>Latency</td><td>≈37 ms per request incl. process start (12 ms is bare Node)</td></tr></table>
 <p>All 12 goals mapped to tests and evidence in <code>docs/EVIDENCE.md</code>.</p>
 
