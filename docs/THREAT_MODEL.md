@@ -49,8 +49,7 @@ readable only by the service user (0600/0700) or the master key comes from a KMS
 
 ## Exclusions and remaining risks
 - **Largest risk:** an attacker with full control of the host (keys + disk) can decrypt and can
-  roll back state *and* log consistently; mitigations: external KMS for the master key, shipping
-  signed log heads to an external witness (not implemented).
+  roll back state *and* log consistently unless the external witness is configured (implemented, TRACK4_WITNESS_DIR); master-key theft still needs an external KMS.
 - No HSM; key erasure relies on process memory hygiene in Node.
 - Cluster transport is a shared filesystem in the prototype; messaging has no network transport.
 - Detector accuracy is measured only on public practice data and our synthetic set, not production traffic.

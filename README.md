@@ -136,6 +136,11 @@ cd dashboard && npm install && npm run dev     # http://localhost:3000
 ```
 Runs the real adapter and ops CLI (whitelisted actions only, state in `<os temp>/tbv-dashboard`): lost-device flow with the signed decision trail and a reason for every allow/deny; log verification, key rotation and a live rollback attack that fails closed; cluster propagation evidence; detector metrics and explained alerts on a fresh synthetic log.
 
+## Self-defence, witness and Attack Lab
+- **Detect and respond** (core/defense/guard.ts): the service watches its own traffic and writes ML-DSA-signed security_alert records for probing (one identity denied on 3+ files in 60 s), malformed-input bursts, use of a revoked identity, request-ID reuse and integrity failures (npm run ops -- alerts). With TRACK4_AUTO_QUARANTINE=1 a probing identity is also quarantined; this is off by default because actor IDs in the judged interface are caller-supplied, so automatic lockout could be abused to lock out a real user.
+- **External witness** (core/audit/witness.ts): with TRACK4_WITNESS_DIR set, every signed audit-log head is mirrored to a location the service host does not control; rolling back state and log together is then detected and refused.
+- **Attack Lab** (npm run ops -- attack all, and the console page): 12 real attacks (stolen device key, replay, forged and rolled-back policy, state rollback, consistent state+log rollback, log edit, log injection, prototype pollution and path traversal, malformed flood, probing, protected_read abuse) run against fresh instances; all are blocked, with evidence. A regression test keeps it that way.
+
 ## Performance
 One request = one Node process. Measured in Docker `node:24.11.1` on a native filesystem:
 about **37 ms per `read` including process start** (bare `node` start-up is ~12 ms; ~11 ms of
@@ -147,9 +152,7 @@ compared with stripping types at runtime.
 - The master key lives on the same host as the data unless `TRACK4_MASTER_KEY` is supplied by an
   external KMS; an attacker with full host access and the key file can decrypt.
 - `setup` is a trusted operator operation and resets all state.
-- Rolling back **both** the state and the log (and head) together to an older consistent copy is
-  not detectable on the host alone; it needs an external anchor (e.g. shipping signed log heads to a
-  separate witness). The audit signing key lives on the same host as the log.
+- Rolling back state and log together is detected only when the external witness is configured (TRACK4_WITNESS_DIR); without it, a host attacker could restore an older consistent copy. The audit signing key lives on the same host as the log.
 - A reused `request_id` is only honoured as an identical retry of an earlier allow; any other reuse
   is denied without content.
 - Cluster demo: node processes sync policy over a shared filesystem (no network listener); requests

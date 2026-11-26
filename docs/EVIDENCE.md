@@ -29,3 +29,11 @@ Revocation propagation: see goal 2.
 See README "Known limitations": master key and audit signing key share the host (KMS env var
 supported); consistent rollback of state **and** log together needs an external witness; cluster
 transport is a shared filesystem; messaging is a tested library without network transport.
+
+## Live security assessment readiness
+| Evidence | Result |
+|---|---|
+| Attack Lab: `npm run ops -- attack all`, `tests/attacks.test.ts` | 12/12 real attacks blocked (stolen device key, replay, forged policy, policy rollback, state rollback, consistent state+log rollback with witness, log edit, log injection, `__proto__`/path traversal, malformed flood, probing, protected_read abuse) |
+| Self-defence: `tests/defense.test.ts` | Signed `security_alert` records for probing, malformed bursts, revoked-identity use, request-ID reuse, integrity failures; opt-in quarantine (`TRACK4_AUTO_QUARANTINE=1`) |
+| External witness: `tests/witness.test.ts` | Consistent rollback of state and log detected with `TRACK4_WITNESS_DIR`; undetected without it (documented limitation) |
+| Messaging run: `npm run ops -- messaging` | Conversation delivered out of order; replay, re-addressing, tampering, sequence change, session hijack and stolen-identity-key decryption all rejected |
