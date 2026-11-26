@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Bell, Check, FileText, KeyRound, LayoutGrid, Network, ScrollText, ShieldX, Users, X } from "lucide-react";
+import { Bell, Check, Crosshair, FileText, KeyRound, LayoutGrid, Network, ScrollText, ShieldCheck, ShieldX, Users, X } from "lucide-react";
 import { animate, motion } from "motion/react";
 import { Tour } from "@/components/tour";
 import type { TourStep } from "@/components/tour";
@@ -14,7 +14,7 @@ import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "
 /* eslint-disable @typescript-eslint/no-explicit-any */
 type Res = { ok: boolean; out: any; blocked?: boolean; ms?: number };
 type Row = { seq: number; ts: string; type: string; actor: string | null; asset: string | null; decision: string | null; reason: string | null; hash: string };
-type Section = "overview" | "files" | "users" | "audit" | "keys" | "nodes" | "alerts";
+type Section = "overview" | "files" | "users" | "audit" | "keys" | "nodes" | "alerts" | "lab";
 
 const USERS = ["maya", "omar", "dana", "mallory"];
 const BECAUSE: Record<string, string> = {
@@ -80,6 +80,8 @@ function Stats({ items }: { items: { label: string; value: string; note: string 
   );
 }
 const primary = "bg-[#1D4ED8] text-white hover:bg-[#1A43B8]";
+/** New random seed for a freshly generated access log (called from event handlers). */
+const freshSeed = () => Math.floor(Math.random() * 1e6);
 
 /** Counts a leading number up from zero whenever the value changes (e.g. "19 ms"). */
 function CountUp({ value }: { value: string }) {
@@ -124,6 +126,15 @@ export default function Console() {
   const [scenarioOpen, setScenarioOpen] = useState(false);
   const [results, setResults] = useState<({ pass: boolean; actual: string } | null)[]>([]);
   const [touring, setTouring] = useState(false);
+  const [attacks, setAttacks] = useState<any[]>([]);
+  const [attackResults, setAttackResults] = useState<Record<string, any>>({});
+  const runAttacks = async (id: string) => {
+    const r = await run("attack", { id });
+    const next: Record<string, any> = {};
+    for (const x of Array.isArray(r.out) ? r.out : []) next[x.id] = x;
+    setAttackResults((prev) => ({ ...prev, ...next }));
+    return Array.isArray(r.out) ? r.out : [];
+  };
 
   const refresh = useCallback(async () => {
     const [l, s] = await Promise.all([api("log"), api("state")]);
@@ -151,6 +162,7 @@ export default function Console() {
     // eslint-disable-next-line react-hooks/set-state-in-effect
     void refresh();
     void api("evidence").then((r) => setEv(r.out));
+    void api("attacks").then((r) => setAttacks(Array.isArray(r.out) ? r.out : []));
   }, [refresh]);
 
   const read = async (who: string, file: string) => {
@@ -209,9 +221,10 @@ export default function Console() {
     { section: "overview", target: "reset-btn", title: "The operator recovers", body: "In production this is a restore from a verified, signed backup that keeps every later revocation. Here we reset and replay the revocation.", run: async () => { await run("reset"); await readAs("maya"); await run("revoke", { actor: "maya" }); await readAs("maya"); setLastRead(null); return ok("Service healthy, maya still revoked"); } },
     { section: "audit", target: "audit", title: "A tamper-evident trail", body: "Every allow and every block is hash-chained and signed with ML-DSA-65. Anyone with the public key can verify it.", run: async () => { const r = await run("verify"); setVerify(r.out); return r.out?.ok ? ok(`Log verified: ${r.out.records} records, all signatures valid`) : bad("Log verification failed"); } },
     { section: "keys", target: "keys", title: "Rotating the data key", body: "A new key version re-encrypts every file in one atomic step. The old version is retired.", run: async () => { const r = await run("rotate"); return r.ok ? ok(`Rotated v${r.out.from} to v${r.out.to}, ${r.out.reencrypted} files re-encrypted`) : bad("Rotation refused"); } },
+    { section: "lab", target: "lab", title: "Judges try to break it", body: "The Attack Lab launches twelve real attacks: stolen device, replay, forged and rolled-back policy, state and log rollback, log tampering and injection, prototype pollution, malformed floods, probing, protected-read abuse.", run: async () => { const res = await runAttacks("all"); const blocked = res.filter((x: any) => x.blocked).length; return blocked === res.length ? ok(`${blocked} of ${res.length} attacks blocked, each with evidence`) : bad(`${blocked} of ${res.length} blocked`); }, dwell: 9000 },
     { section: "nodes", target: "nodes-stats", title: "Revocation reaches every node", body: "Three separate node processes pull an ML-DSA-signed, epoch-versioned policy and refuse forged or older versions.", run: async () => (ev?.cluster ? ok(`Median ${ev.cluster.revocation_propagation_ms.median} ms, worst case ${ev.cluster.revocation_propagation_ms.max} ms`) : undefined) },
     { section: "nodes", target: "nodes-checks", title: "Rotation with a documented cutoff", body: "The old key is accepted until the cutoff, then rejected everywhere, while transfers that already started finish.", dwell: 6000 },
-    { section: "alerts", target: "alerts", title: "Catching misuse of valid credentials", body: "An explainable detector (rules, approvals and a service graph, no ML) analyses a fresh access log with hidden incidents.", run: async () => { const r = await run("detect", { seed: Math.floor(Math.random() * 1e6) }); setDet(r.out); return r.out?.alerts ? ok(`${r.out.alerts.length} alerts for ${r.out.incidents.length} hidden incidents`) : bad("Analysis failed"); }, dwell: 8000 },
+    { section: "alerts", target: "alerts", title: "Catching misuse of valid credentials", body: "An explainable detector (rules, approvals and a service graph, no ML) analyses a fresh access log with hidden incidents.", run: async () => { const r = await run("detect", { seed: freshSeed() }); setDet(r.out); return r.out?.alerts ? ok(`${r.out.alerts.length} alerts for ${r.out.incidents.length} hidden incidents`) : bad("Analysis failed"); }, dwell: 8000 },
     { section: "overview", target: "kpis", title: "Verified, not claimed", body: "Official validator 22/22 in the judges' runtime, revocation in about 20 ms, every decision explained and signed. Thank you.", dwell: 7000 },
   ];
 
@@ -230,6 +243,7 @@ export default function Console() {
     { id: "keys", label: "Keys", icon: KeyRound },
     { id: "nodes", label: "Nodes", icon: Network },
     { id: "alerts", label: "Alerts", icon: Bell },
+    { id: "lab", label: "Attack lab", icon: Crosshair },
   ];
   const title = nav.find((n) => n.id === section)?.label;
 
@@ -468,6 +482,38 @@ export default function Console() {
             </>
           )}
 
+          {section === "lab" && (
+            <Panel
+              tour="lab"
+              title="Attack lab"
+              action={<Button size="sm" className={primary} disabled={busy} onClick={async () => { const res = await runAttacks("all"); toast(`${res.filter((x: any) => x.blocked).length} of ${res.length} attacks blocked`); }}>Run all attacks</Button>}
+            >
+              <p className="border-b border-[#E3E5E8] px-4 py-3 text-sm text-[#5C6370]">Each attack runs for real against a fresh, isolated instance of the service. Nothing here is simulated in the browser.</p>
+              <ul>
+                {attacks.map((a: any) => {
+                  const r = attackResults[a.id];
+                  return (
+                    <li key={a.id} className="grid gap-3 border-b border-[#EEF0F2] px-4 py-3 text-sm last:border-b-0 md:grid-cols-[1fr_auto]">
+                      <div className="min-w-0">
+                        <div className="font-medium">{a.name}</div>
+                        <div className="text-[#5C6370]">{a.attack}</div>
+                        <div className="mt-0.5 text-xs text-[#5C6370]">Defence: {a.defense}</div>
+                        {r && (
+                          <motion.div initial={{ opacity: 0, y: 4 }} animate={{ opacity: 1, y: 0 }} className={`mt-1.5 inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-xs ${r.blocked ? "bg-[#E7F5EE] text-[#0F7B4F]" : "bg-[#FDECEA] text-[#B42318]"}`}>
+                            <motion.span initial={{ scale: 0 }} animate={{ scale: 1 }} transition={{ type: "spring", stiffness: 320, damping: 14 }}>{r.blocked ? <ShieldCheck className="size-3.5" /> : <ShieldX className="size-3.5" />}</motion.span>
+                            <span className="font-medium">{r.blocked ? "Blocked" : "Not blocked"}</span>
+                            <span className="font-mono">{r.evidence}</span>
+                          </motion.div>
+                        )}
+                      </div>
+                      <div><Button size="sm" variant="outline" disabled={busy} onClick={() => runAttacks(a.id)}>{r ? "Run again" : "Run"}</Button></div>
+                    </li>
+                  );
+                })}
+              </ul>
+            </Panel>
+          )}
+
           {section === "alerts" && d0 && (
             <>
               <Stats
@@ -478,7 +524,7 @@ export default function Console() {
                   { label: "Evaluated", value: `${d0.standard.aggregate.incidents + d0.hard.aggregate.incidents}`, note: "injected incidents, 20 runs" },
                 ]}
               />
-              <Panel tour="alerts" title="Suspicious activity" action={<Button size="sm" className={primary} disabled={busy} onClick={async () => setDet((await run("detect", { seed: Math.floor(Math.random() * 1e6) })).out)}>Analyze a new log</Button>}>
+              <Panel tour="alerts" title="Suspicious activity" action={<Button size="sm" className={primary} disabled={busy} onClick={async () => setDet((await run("detect", { seed: freshSeed() })).out)}>Analyze a new log</Button>}>
                 {!det && <p className="px-4 py-8 text-center text-sm text-[#5C6370]">Analyze a freshly generated access log to see what the detector flags and why.</p>}
                 {det && (
                   <ul>
