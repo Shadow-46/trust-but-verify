@@ -298,7 +298,7 @@ export default function Console() {
     { section: "audit", target: "audit", title: "A tamper-evident trail", body: "Every allow and every block is hash-chained and signed with ML-DSA-65. Anyone with the public key can verify it.", run: async () => { const r = await run("verify"); setVerify(r.out); return r.out?.ok ? ok(`Log verified: ${r.out.records} records, all signatures valid`) : bad("Log verification failed"); } },
     { section: "keys", target: "keys", title: "Rotating the data key", body: "A new key version re-encrypts every file in one atomic step. The old version is retired.", run: async () => { const r = await run("rotate"); return r.ok ? ok(`Rotated v${r.out.from} to v${r.out.to}, ${r.out.reencrypted} files re-encrypted`) : bad("Rotation refused"); } },
     { section: "lab", target: "lab", title: "Judges try to break it", body: "The Attack Lab launches fifteen real attacks: stolen device, replay, forged and rolled-back policy, state and log rollback, log tampering, truncation and injection, key swaps, prototype pollution, malformed floods, probing, protected-read abuse.", run: async () => { const res = await runAttacks("all"); const blocked = res.filter((x: any) => x.blocked).length; return blocked === res.length ? ok(`${blocked} of ${res.length} attacks blocked, each with evidence`) : bad(`${blocked} of ${res.length} blocked`); }, dwell: 9000 },
-    { section: "nodes", target: "live-cluster", title: "Watch a revocation ripple", body: "Three real node processes each verify the ML-DSA-signed policy. We report maya's phone lost and watch every node switch from allow to deny.", run: async () => { await startCluster(); const msg = await revokeLive(); return msg ? ok(msg) : bad("Nodes did not converge"); }, dwell: 8000 },
+    { section: "nodes", target: "live-cluster", title: "Watch a revocation ripple", body: "Three real node processes pull the ML-DSA-signed policy from the control plane over HTTP. We report maya's phone lost and watch the signed update travel to every node and each one switch from allow to deny.", run: async () => { await startCluster(); const msg = await revokeLive(); return msg ? ok(msg) : bad("Nodes did not converge"); }, dwell: 8000 },
     { section: "nodes", target: "nodes-stats", title: "Revocation reaches every node", body: "Three separate node processes pull an ML-DSA-signed, epoch-versioned policy and refuse forged or older versions.", run: async () => (ev?.cluster ? ok(`Median ${ev.cluster.revocation_propagation_ms.median} ms, worst case ${ev.cluster.revocation_propagation_ms.max} ms`) : undefined) },
     { section: "nodes", target: "nodes-checks", title: "Rotation with a documented cutoff", body: "The old key is accepted until the cutoff, then rejected everywhere, while transfers that already started finish.", dwell: 6000 },
     { section: "messages", target: "messages", title: "Post-quantum messaging", body: "alice and bob agree keys with X25519 plus ML-KEM-768 and sign the handshake with ML-DSA-65. Then we replay, re-address, tamper, hijack the session and try to decrypt old traffic with stolen identity keys.", run: async () => { const out = await runChat(); const n = out?.attacks?.filter((a: any) => a.blocked).length ?? 0; return n === out?.attacks?.length ? ok(`Conversation delivered; ${n} of ${n} attacks rejected`) : bad(`${n} attacks rejected`); }, dwell: 9000 },
@@ -644,9 +644,15 @@ export default function Console() {
             <Panel
               tour="lab"
               title="Attack lab"
-              action={<Button size="sm" className={primary} disabled={busy} onClick={async () => { const res = await runAttacks("all"); toast(`${res.filter((x: any) => x.blocked).length} of ${res.length} attacks blocked`); }}>Run all attacks</Button>}
+              action={
+                <div className="flex gap-2">
+                  <a href="/lab" className="inline-flex h-8 items-center rounded-md border border-[#E3E5E8] px-3 text-sm hover:bg-[#F6F7F8]">Open live Attack Lab</a>
+                  <a href="/monitor" target="_blank" className="inline-flex h-8 items-center rounded-md border border-[#E3E5E8] px-3 text-sm hover:bg-[#F6F7F8]">Open Live Monitor</a>
+                  <Button size="sm" className={primary} disabled={busy} onClick={async () => { const res = await runAttacks("all"); toast(`${res.filter((x: any) => x.blocked).length} of ${res.length} attacks blocked`); }}>Run all attacks</Button>
+                </div>
+              }
             >
-              <p className="border-b border-[#E3E5E8] px-4 py-3 text-sm text-[#5C6370]">Each attack runs for real against a fresh, isolated instance of the service. Nothing here is simulated in the browser.</p>
+              <p className="border-b border-[#E3E5E8] px-4 py-3 text-sm text-[#5C6370]">The scorecard runs every attack for real against a fresh, isolated instance. The live Attack Lab attacks the running service step by step while the Live Monitor shows it reacting.</p>
               <ul>
                 {attacks.map((a: any) => {
                   const r = attackResults[a.id];
