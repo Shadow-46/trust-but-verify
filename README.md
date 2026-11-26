@@ -18,7 +18,7 @@ Node built-ins, so there is no `npm install` for the core.
 ```sh
 git clone https://github.com/Shadow-46/trust-but-verify.git
 cd trust-but-verify
-npm test                     # 94 tests with the toolkit cloned at ../Track-4-Toolkit (see below), else 90:
+npm test                     # 99 tests with the toolkit cloned at ../Track-4-Toolkit (see below), else 95:
                              # the 4 practice-data detector tests need it. One test is Linux-only (skipped on Windows).
 ```
 
@@ -180,7 +180,8 @@ laptop A itself at `http://localhost:3000/lab`: through the gateway it is view-o
 smoothest demo use the production build: `npm run demo` (instead of `npm run dev`) plus `npm run lan`.
 
 ## Self-defence, witness and Attack Lab
-- **Detect and respond** (core/defense/guard.ts): the service watches its own traffic and writes ML-DSA-signed security_alert records for probing (one identity denied on 3+ files in 60 s), malformed-input bursts, use of a revoked identity, request-ID reuse and integrity failures (npm run ops -- alerts). With TRACK4_AUTO_QUARANTINE=1 a probing identity is also quarantined; this is off by default because actor IDs in the judged interface are caller-supplied, so automatic lockout could be abused to lock out a real user.
+- **Detect and respond** (core/defense/guard.ts): the service watches its own traffic and writes ML-DSA-signed security_alert records for probing (one identity denied on 3+ files in 60 s), malformed-input bursts, use of a revoked identity, request-ID reuse, integrity failures, **injection-shaped identifiers** (control characters/newlines, `__proto__`, path traversal) and **refused encrypted-copy (protected_read) requests** (npm run ops -- alerts). Every alert names the identity, the service and the triggering event (request IDs + audit seq).
+- **Signed node logs and node alerts** (core/cluster/node.ts): every cluster node keeps its own hash-chained, ML-DSA-65-signed decision log (`<node>/audit.jsonl`, key generated at runtime), recording every allow and deny, every adopted policy and every refused one. Replays, cross-node replays, forged request signatures, revoked devices or identities still in use, stale requests and forged or older policies raise signed alerts there, naming identity, node and event. `npm run ops -- verify-log <cluster dir>` verifies all node logs. Status probes are dry runs (no nonce consumed, nothing logged). The node log is evidence: a logging failure never changes a decision. With TRACK4_AUTO_QUARANTINE=1 a probing identity is also quarantined; this is off by default because actor IDs in the judged interface are caller-supplied, so automatic lockout could be abused to lock out a real user.
 - **External witness** (core/audit/witness.ts): with TRACK4_WITNESS_DIR set, every signed audit-log head is mirrored to a location the service host does not control; rolling back state and log together is then detected and refused.
 - **Attack scorecard** (npm run ops -- attack all, and the console page): 15 real attacks (stolen device key, replay, forged and rolled-back policy, state rollback, consistent state+log rollback, log edit, truncation with the head deleted, verification-key swap, signing-key deletion, log injection, prototype pollution and path traversal, malformed flood, probing, protected_read abuse) run against fresh instances; all are blocked, with evidence. The live Attack Lab (below) runs 8 of them against the running service. Regression tests keep both that way.
 

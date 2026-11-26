@@ -23,6 +23,8 @@ Reproduce: `npm test`, `bash tools/judge-parity.sh <Track-4-Toolkit>`, `python t
 
 Detector alerts (goals 6–8) carry MITRE ATT&CK IDs: T1098 Account Manipulation + T1078 Valid Accounts for unapproved role changes, TA0008 Lateral Movement / T1021 Remote Services for unexpected service-edge sequences, T1078 for borrowed or out-of-scope approvals (`core/detector/detect.ts` `ATTACK_MAP`, `tests/detector.test.ts`); re-running `npm run demo:detector` gives identical metrics.
 
+Goals 2 and 5 on the nodes: every cluster node keeps its own hash-chained, ML-DSA-signed decision log (allow, deny, policy adopted/refused) and raises signed alerts naming identity, node and event for replay, cross-node replay, forged signatures, revoked devices still in use and forged or older policies (`tests/node-audit.test.ts`; `npm run ops -- verify-log <cluster dir>`). In the live Attack Lab every one of the 8 live attacks raises at least one such alert (`tests/live-lab.test.ts`).
+
 ## Performance
 `read` ≈ 37 ms per request including Node process start (bare Node ≈ 12 ms), native Linux filesystem.
 Revocation propagation: see goal 2.
