@@ -1,7 +1,7 @@
 import { join } from "node:path";
 import { generateSigningKeyPair } from "../crypto/sign.ts";
 import { atomicWriteFile, ensurePrivateDir, readTextIfExists } from "../store/fsx.ts";
-import { RequestError } from "../errors.ts";
+import { IntegrityError, RequestError } from "../errors.ts";
 import { signPolicy, verifyPolicy } from "./policy.ts";
 import type { DeviceRecord, Policy, SignedPolicy } from "./policy.ts";
 
@@ -13,7 +13,7 @@ import type { DeviceRecord, Policy, SignedPolicy } from "./policy.ts";
 
 export const DEFAULT_GRACE_MS = 30_000;
 
-export type ControlPaths = { dir: string; signingKey: string; anchor: string; published: string };
+export type ControlPaths = { dir: string; signingKey: string; anchor: string; published: string; highWater: string };
 
 export function controlPaths(dir: string): ControlPaths {
   return {
@@ -21,6 +21,7 @@ export function controlPaths(dir: string): ControlPaths {
     signingKey: join(dir, "keys", "control.key"),
     anchor: join(dir, "anchor.pub"),
     published: join(dir, "policy.signed.json"),
+    highWater: join(dir, "keys", "epoch.hwm"),
   };
 }
 
@@ -67,12 +68,17 @@ export class ControlPlane {
     if (!key || !anchor || !published) throw new RequestError("control_plane_not_initialized");
     const anchorDer = Buffer.from(anchor, "base64");
     const policy = verifyPolicy(anchorDer, JSON.parse(published) as SignedPolicy);
+    // The published file may have been swapped for an older, genuinely signed copy; publishing on top
+    // of it would silently drop later revocations. Refuse to load below the private high-water mark.
+    const highWater = Number(readTextIfExists(paths.highWater) ?? "0");
+    if (policy.epoch < highWater) throw new IntegrityError("control plane policy rollback");
     return new ControlPlane(paths, Buffer.from(key, "base64"), anchorDer, policy);
   }
 
   /** Sign and atomically publish the next epoch. Returns the new epoch. */
   publish(now = Date.now()): number {
     this.policy = { ...this.policy, epoch: this.policy.epoch + 1, issued_at: now };
+    atomicWriteFile(this.paths.highWater, String(this.policy.epoch));
     atomicWriteFile(this.paths.published, JSON.stringify(signPolicy(this.signingKey, this.policy)));
     this.publishedAt.set(this.policy.epoch, now);
     return this.policy.epoch;
