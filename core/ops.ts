@@ -8,6 +8,7 @@ import { openContext } from "./vault.ts";
 import { securityAlerts } from "./defense/guard.ts";
 import { listAttacks, runAttack } from "./demo/attacks.ts";
 import { messagingDemo } from "./demo/messagingDemo.ts";
+import { netClusterBench, netMessagingDemo } from "./demo/network.ts";
 import { clusterEnrol, clusterInit, clusterRevoke, clusterStatus } from "./demo/liveCluster.ts";
 import { createBackup, restoreBackup } from "./backup.ts";
 import { rotateStoredDataKey } from "./keys/rotation.ts";
@@ -101,7 +102,14 @@ export function runOps(argv: string[]): { code: number; out: unknown } {
 
 if (resolve(process.argv[1] ?? "") === fileURLToPath(import.meta.url)) {
   try {
-    const { code, out } = runOps(process.argv.slice(2));
+    const argv = process.argv.slice(2);
+    // Network demos are asynchronous (real processes over loopback HTTP/TCP).
+    const { code, out } =
+      argv[0] === "net-cluster-bench"
+        ? { code: 0, out: await netClusterBench() }
+        : argv[0] === "net-messaging"
+          ? await netMessagingDemo(argv[1]).then((r) => ({ code: r.attacks.every((a) => a.blocked) ? 0 : 1, out: r }))
+          : runOps(argv);
     process.stdout.write(JSON.stringify(out) + "\n");
     process.exitCode = code;
   } catch (err) {

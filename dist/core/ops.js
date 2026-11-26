@@ -9,6 +9,7 @@ import { openContext } from "./vault.js";
 import { securityAlerts } from "./defense/guard.js";
 import { listAttacks, runAttack } from "./demo/attacks.js";
 import { messagingDemo } from "./demo/messagingDemo.js";
+import { netClusterBench, netMessagingDemo } from "./demo/network.js";
 import { clusterEnrol, clusterInit, clusterRevoke, clusterStatus } from "./demo/liveCluster.js";
 import { createBackup, restoreBackup } from "./backup.js";
 import { rotateStoredDataKey } from "./keys/rotation.js";
@@ -102,7 +103,14 @@ export function runOps(argv          )                                 {
 
 if (resolve(process.argv[1] ?? "") === fileURLToPath(import.meta.url)) {
   try {
-    const { code, out } = runOps(process.argv.slice(2));
+    const argv = process.argv.slice(2);
+    // Network demos are asynchronous (real processes over loopback HTTP/TCP).
+    const { code, out } =
+      argv[0] === "net-cluster-bench"
+        ? { code: 0, out: await netClusterBench() }
+        : argv[0] === "net-messaging"
+          ? await netMessagingDemo(argv[1]).then((r) => ({ code: r.attacks.every((a) => a.blocked) ? 0 : 1, out: r }))
+          : runOps(argv);
     process.stdout.write(JSON.stringify(out) + "\n");
     process.exitCode = code;
   } catch (err) {
