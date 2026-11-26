@@ -7,6 +7,7 @@ import { generate } from "./detector/synth.ts";
 import { openContext } from "./vault.ts";
 import { securityAlerts } from "./defense/guard.ts";
 import { listAttacks, runAttack } from "./demo/attacks.ts";
+import { messagingDemo } from "./demo/messagingDemo.ts";
 import { clusterEnrol, clusterInit, clusterRevoke, clusterStatus } from "./demo/liveCluster.ts";
 import { createBackup, restoreBackup } from "./backup.ts";
 import { rotateStoredDataKey } from "./keys/rotation.ts";
@@ -82,6 +83,8 @@ export function runOps(argv: string[]): { code: number; out: unknown } {
     case "cluster-enrol":
       if (!arg) break;
       return { code: 0, out: clusterEnrol(resolve(arg)) };
+    case "messaging":
+      return { code: 0, out: messagingDemo(arg) };
     case "attacks":
       return { code: 0, out: listAttacks() };
     case "attack": {

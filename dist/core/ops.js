@@ -8,6 +8,7 @@ import { generate } from "./detector/synth.js";
 import { openContext } from "./vault.js";
 import { securityAlerts } from "./defense/guard.js";
 import { listAttacks, runAttack } from "./demo/attacks.js";
+import { messagingDemo } from "./demo/messagingDemo.js";
 import { clusterEnrol, clusterInit, clusterRevoke, clusterStatus } from "./demo/liveCluster.js";
 import { createBackup, restoreBackup } from "./backup.js";
 import { rotateStoredDataKey } from "./keys/rotation.js";
@@ -83,6 +84,8 @@ export function runOps(argv          )                                 {
     case "cluster-enrol":
       if (!arg) break;
       return { code: 0, out: clusterEnrol(resolve(arg)) };
+    case "messaging":
+      return { code: 0, out: messagingDemo(arg) };
     case "attacks":
       return { code: 0, out: listAttacks() };
     case "attack": {
