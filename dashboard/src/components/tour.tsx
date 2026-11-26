@@ -22,6 +22,10 @@ export type TourStep<S extends string = string> = {
 
 type Rect = { top: number; left: number; width: number; height: number };
 const PAD = 8;
+const reducedMotion = () => typeof window !== "undefined" && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+// One eased glide per step (no spring overshoot); instant while following scroll/resize.
+const motionFor = (glide: boolean) =>
+  glide && !reducedMotion() ? { duration: 0.45, ease: [0.22, 1, 0.36, 1] as const } : { duration: 0 };
 
 export function Tour<S extends string>({ steps, open, onClose, go }: { steps: TourStep<S>[]; open: boolean; onClose: () => void; go: (s: S) => void }) {
   const [idx, setIdx] = useState(0);
@@ -35,25 +39,44 @@ export function Tour<S extends string>({ steps, open, onClose, go }: { steps: To
   const queue = useRef<Promise<unknown>>(Promise.resolve());
   const step = steps[idx];
 
-  const measure = useCallback(() => {
-    const el = step ? document.querySelector<HTMLElement>(`[data-tour="${step.target}"]`) : null;
-    if (!el) return setRect(null);
-    const r = el.getBoundingClientRect();
-    setRect({ top: r.top - PAD, left: r.left - PAD, width: r.width + PAD * 2, height: r.height + PAD * 2 });
-  }, [step]);
+  // `glide` = animate to the new rect (step change); otherwise follow scroll/resize instantly,
+  // so the spotlight never rubber-bands behind a scrolling page.
+  const [glide, setGlide] = useState(true);
+  const measure = useCallback(
+    (animate = false) => {
+      const el = step ? document.querySelector<HTMLElement>(`[data-tour="${step.target}"]`) : null;
+      setGlide(animate);
+      if (!el) return setRect(null);
+      const r = el.getBoundingClientRect();
+      setRect({ top: r.top - PAD, left: r.left - PAD, width: r.width + PAD * 2, height: r.height + PAD * 2 });
+    },
+    [step],
+  );
 
-  // Enter a step: navigate, bring the target into view, run its action.
+  // Enter a step: navigate, bring the target into view, then glide once scrolling has settled.
   useEffect(() => {
     if (!open || !step) return;
     const token = ++runToken.current;
     setOutcome(null);
     setReady(false);
     go(step.section);
+    let settled = false;
+    const settle = () => {
+      if (settled || token !== runToken.current) return;
+      settled = true;
+      measure(true);
+    };
     const t1 = setTimeout(() => {
-      document.querySelector<HTMLElement>(`[data-tour="${step.target}"]`)?.scrollIntoView({ block: "center", behavior: "smooth" });
-    }, 350);
+      const el = document.querySelector<HTMLElement>(`[data-tour="${step.target}"]`);
+      if (!el) return settle();
+      const r = el.getBoundingClientRect();
+      const visible = r.top >= 0 && r.bottom <= window.innerHeight;
+      if (visible) return settle();
+      document.addEventListener("scrollend", settle, { capture: true, once: true });
+      setTimeout(settle, 600); // browsers without scrollend
+      el.scrollIntoView({ block: "center", behavior: "smooth" });
+    }, 120);
     const t2 = setTimeout(async () => {
-      measure();
       const job = queue.current.then(() => (token === runToken.current && step.run ? step.run() : undefined));
       queue.current = job.catch(() => undefined);
       const r = await job;
@@ -61,7 +84,8 @@ export function Tour<S extends string>({ steps, open, onClose, go }: { steps: To
       if (r) setOutcome(r);
       setTimeout(() => {
         if (token === runToken.current) {
-          measure();
+          settle();
+          measure(true); // the action may have changed the target's size (e.g. new rows)
           setReady(true);
         }
       }, 250);
@@ -69,6 +93,7 @@ export function Tour<S extends string>({ steps, open, onClose, go }: { steps: To
     return () => {
       clearTimeout(t1);
       clearTimeout(t2);
+      document.removeEventListener("scrollend", settle, { capture: true });
     };
   }, [open, idx]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -81,7 +106,11 @@ export function Tour<S extends string>({ steps, open, onClose, go }: { steps: To
 
   useEffect(() => {
     if (!open) return;
-    const onMove = () => measure();
+    let frame = 0;
+    const onMove = () => {
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(() => measure(false));
+    };
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") onClose();
       else if (e.key === "ArrowRight") setIdx((i) => Math.min(i + 1, steps.length - 1));
@@ -95,6 +124,7 @@ export function Tour<S extends string>({ steps, open, onClose, go }: { steps: To
     window.addEventListener("scroll", onMove, true);
     window.addEventListener("keydown", onKey);
     return () => {
+      cancelAnimationFrame(frame);
       window.removeEventListener("resize", onMove);
       window.removeEventListener("scroll", onMove, true);
       window.removeEventListener("keydown", onKey);
@@ -122,13 +152,28 @@ export function Tour<S extends string>({ steps, open, onClose, go }: { steps: To
 
   return (
     <div className="pointer-events-none fixed inset-0 z-[60]" aria-live="polite">
-      {/* Dimmed backdrop with a spotlight cut-out that glides between targets. */}
+      {/* Dimmed backdrop: an SVG mask with a cut-out (cheap to animate, unlike a 9999px box-shadow). */}
+      <svg className="absolute inset-0 h-full w-full" aria-hidden>
+        <defs>
+          <mask id="tour-cutout">
+            <rect width="100%" height="100%" fill="white" />
+            <motion.rect
+              rx={12}
+              fill="black"
+              initial={false}
+              animate={rect ? { x: rect.left, y: rect.top, width: rect.width, height: rect.height } : { x: vw / 2, y: vh / 2, width: 0, height: 0 }}
+              transition={motionFor(glide)}
+            />
+          </mask>
+        </defs>
+        <rect width="100%" height="100%" fill="rgba(15,18,24,0.52)" mask="url(#tour-cutout)" />
+      </svg>
+      {/* Spotlight ring that glides between targets. */}
       <motion.div
-        className="absolute rounded-xl ring-2 ring-[#1D4ED8]"
-        style={{ boxShadow: "0 0 0 9999px rgba(15,18,24,0.52)" }}
+        className="absolute left-0 top-0 rounded-xl ring-2 ring-[#1D4ED8] will-change-transform"
         initial={false}
-        animate={rect ? { top: rect.top, left: rect.left, width: rect.width, height: rect.height, opacity: 1 } : { top: vh / 2, left: vw / 2, width: 0, height: 0, opacity: 1 }}
-        transition={{ type: "spring", stiffness: 170, damping: 24 }}
+        animate={rect ? { x: rect.left, y: rect.top, width: rect.width, height: rect.height, opacity: 1 } : { x: vw / 2, y: vh / 2, width: 0, height: 0, opacity: 0 }}
+        transition={motionFor(glide)}
       >
         <motion.span
           className="absolute inset-0 rounded-xl ring-2 ring-[#1D4ED8]/60"
@@ -141,11 +186,12 @@ export function Tour<S extends string>({ steps, open, onClose, go }: { steps: To
         <motion.div
           key={idx}
           className="pointer-events-auto absolute rounded-xl border border-[#E3E5E8] bg-white p-4 shadow-[0_24px_60px_-20px_rgba(15,18,24,0.45)]"
-          style={{ width: cardW, top: cardTop, left: cardLeft }}
-          initial={{ opacity: 0, y: below ? 10 : -10, scale: 0.98 }}
-          animate={{ opacity: 1, y: 0, scale: 1 }}
+          style={{ width: cardW }}
+          initial={{ opacity: 0, y: below ? 10 : -10, scale: 0.98, top: cardTop, left: cardLeft }}
+          animate={{ opacity: 1, y: 0, scale: 1, top: cardTop, left: cardLeft }}
           exit={{ opacity: 0, scale: 0.98 }}
-          transition={{ duration: 0.25, ease: "easeOut" }}
+          // The card fades in, then glides with the spotlight when the target settles.
+          transition={{ duration: 0.25, ease: "easeOut", top: motionFor(glide), left: motionFor(glide) }}
         >
           <div className="flex items-center justify-between text-xs text-[#5C6370]">
             <span>Step {idx + 1} of {steps.length}</span>
