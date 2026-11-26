@@ -1,0 +1,364 @@
+// Explainable detector (goals 6-8). Pure function: events + approvals + policy
+// in, per-event classification + alerts + timeline out. Labels are never an
+// input; every decision comes from approvals (change control) and the policy
+// baseline, and carries a plain-language reason.
+
+import { markOrder, timeInfo } from "./clock.ts";
+import type { DelayNote } from "./clock.ts";
+import { edgeKey, parseUtc } from "./ingest.ts";
+import type {
+  Alert,
+  AlertRule,
+  Approval,
+  Classification,
+  DetectionReport,
+  GrantApproval,
+  Label,
+  LogEvent,
+  Policy,
+  RevokeApproval,
+} from "./types.ts";
+
+const ALLOWED = new Set(["allow", "success"]);
+const DENIED = new Set(["deny", "denied", "failure", "fail"]);
+/** admin action -> the approval operation it must cite */
+const ADMIN_ACTIONS = new Map<string, string>([
+  ["approve_role_change", "grant_role"],
+  ["grant_role", "grant_role"],
+  ["revoke_role", "revoke_role"],
+]);
+
+interface Work {
+  e: LogEvent;
+  c: Classification;
+  t: number; // corrected event time
+  decided: boolean;
+}
+
+const fmtMs = (ms: number) => `${ms} ms`;
+const sessionKey = (actor: string, session: string) => `${actor}\u0000${session}`;
+
+export function detect(
+  events: readonly LogEvent[],
+  approvals: ReadonlyMap<string, Approval>,
+  policy: Policy,
+): DetectionReport {
+  // ---- index approvals by subject ------------------------------------------------
+  const grants = new Map<string, GrantApproval[]>();
+  const revokes = new Map<string, RevokeApproval[]>();
+  for (const a of approvals.values()) {
+    if (a.operation === "grant_role") grants.set(a.subject, [...(grants.get(a.subject) ?? []), a]);
+    else revokes.set(a.subject, [...(revokes.get(a.subject) ?? []), a]);
+  }
+  const grantsFor = (subject: string, role: string) =>
+    (grants.get(subject) ?? []).filter((g) => g.role === role);
+  const revocationsBy = (subject: string, ms: number) =>
+    (revokes.get(subject) ?? []).filter((r) => parseUtc(r.effective_at_utc, r.approval_id) <= ms);
+  const inWindow = (g: GrantApproval, ms: number) =>
+    parseUtc(g.valid_from_utc, g.approval_id) <= ms && ms < parseUtc(g.valid_until_utc, g.approval_id);
+  /** services a role reaches: policy targets plus any approval scope for it */
+  const roleReach = (subject: string, role: string) => {
+    const reach = new Set(policy.roles.get(role) ?? []);
+    for (const g of grantsFor(subject, role)) for (const s of g.scope) reach.add(s);
+    return reach;
+  };
+
+  // ---- times, duplicates, ordering -------------------------------------------------
+  const seen = new Set<string>();
+  const all: Work[] = events.map((e, i) => {
+    const { time, flags } = timeInfo(e, policy);
+    const c: Classification = {
+      event_id: e.event_id,
+      receipt_index: i,
+      label: "routine",
+      reason: "",
+      flags,
+      time,
+      alert_ids: [],
+    };
+    const w: Work = { e, c, t: time.corrected_event_ms, decided: false };
+    if (seen.has(e.event_id)) {
+      flags.push("duplicate_event_id");
+      decide(w, "duplicate_event", `Repeats event_id ${e.event_id}; first record kept, this one excluded from analysis (possible replay or collector retry).`);
+    }
+    seen.add(e.event_id);
+    return w;
+  });
+  const live = all.filter((w) => !w.decided);
+  const delays = markOrder(
+    live.map((w) => ({ id: w.e.event_id, session_id: w.e.session_id, time: w.c.time, flags: w.c.flags })),
+    policy.clock.uncertaintyMs,
+  );
+  const byTime = [...live].sort((a, b) => a.t - b.t || a.c.receipt_index - b.c.receipt_index);
+
+  // ---- alerts ----------------------------------------------------------------------
+  const alerts: Alert[] = [];
+  const newAlert = (
+    rule: AlertRule,
+    severity: Alert["severity"],
+    members: Work[],
+    trigger: Work,
+    services: string[],
+    summary: string,
+    limits: string,
+  ): Alert => {
+    const sorted = [...members].sort((a, b) => a.t - b.t || a.c.receipt_index - b.c.receipt_index);
+    const alert: Alert = {
+      alert_id: `alert-${String(alerts.length + 1).padStart(3, "0")}`,
+      rule,
+      severity,
+      actor: trigger.e.actor,
+      session_ids: [...new Set(sorted.map((w) => w.e.session_id).filter((s) => s !== ""))],
+      correlation_ids: [...new Set(sorted.map((w) => w.e.correlation_id).filter((s) => s !== ""))],
+      event_ids: sorted.map((w) => w.e.event_id),
+      services,
+      summary,
+      limits,
+      detected_at_received_utc: trigger.e.received_time_utc,
+      detected_by_event_id: trigger.e.event_id,
+    };
+    for (const w of sorted) w.c.alert_ids.push(alert.alert_id);
+    alerts.push(alert);
+    return alert;
+  };
+  const attach = (alert: Alert, w: Work) => {
+    alert.event_ids.push(w.e.event_id);
+    w.c.alert_ids.push(alert.alert_id);
+  };
+
+  // ---- pass 1: role changes and admin actions (goal 6) ----------------------------
+  const taints = new Map<string, { t: number; alert: Alert; eventId: string }>();
+  for (const w of byTime) {
+    const e = w.e;
+    if (e.action === "role_change" && e.role_before !== e.role_after) {
+      classifyRoleChange(w, taints);
+    } else if (ADMIN_ACTIONS.has(e.action)) {
+      classifyAdmin(w);
+    }
+  }
+
+  function classifyRoleChange(w: Work, taintMap: typeof taints) {
+    const e = w.e;
+    const grant = grantsFor(e.actor, e.role_after).find((g) => inWindow(g, w.t));
+    const revoke = (revokes.get(e.actor) ?? []).find(
+      (r) => r.role === e.role_before && parseUtc(r.effective_at_utc, r.approval_id) <= w.t,
+    );
+    const match = grant ?? revoke;
+    if (match && (e.approval_id === "" || e.approval_id === match.approval_id)) {
+      decide(w, "approved_change",
+        `${e.actor}: ${e.role_before} -> ${e.role_after} matches ${match.approval_id} (subject, role and time ${w.c.time.corrected_event_utc} within approval).`);
+      return;
+    }
+    const why = match
+      ? `cites ${e.approval_id}, but the matching approval is ${match.approval_id}`
+      : e.approval_id !== ""
+        ? `cites ${e.approval_id}, which does not authorize ${e.actor} -> ${e.role_after} at ${w.c.time.corrected_event_utc}`
+        : `no approval authorizes ${e.actor} to become ${e.role_after} at ${w.c.time.corrected_event_utc}`;
+    decide(w, "unexpected_role_change", `Role change ${e.role_before} -> ${e.role_after} succeeded but ${why}.`);
+    const alert = newAlert("unexpected_role_change", "high", [w], w, [e.source_service, e.target_service],
+      `${e.actor} changed role ${e.role_before} -> ${e.role_after} without matching authorization (${why}).`,
+      "Shows the change happened and was not authorized; does not show how it happened or the actor's intent.");
+    if (e.session_id !== "") taintMap.set(sessionKey(e.actor, e.session_id), { t: w.t, alert, eventId: e.event_id });
+  }
+
+  function classifyAdmin(w: Work) {
+    const e = w.e;
+    const needOp = ADMIN_ACTIONS.get(e.action);
+    const a = e.approval_id === "" ? undefined : approvals.get(e.approval_id);
+    let problem = "";
+    if (!a) problem = e.approval_id === "" ? "cites no approval" : `cites unknown approval ${e.approval_id}`;
+    else if (a.operation !== needOp) problem = `${a.approval_id} is a ${a.operation}, not a ${needOp}`;
+    else if (a.approved_by !== e.actor) problem = `${a.approval_id} was approved by ${a.approved_by}, not ${e.actor}`;
+    else if (a.operation === "grant_role" && w.t >= parseUtc(a.valid_until_utc, a.approval_id)) {
+      problem = `${a.approval_id} expired at ${a.valid_until_utc}`;
+    }
+    if (problem === "" && a) {
+      decide(w, "approved_change",
+        `${e.actor} performs ${e.action} for ${a.subject} (${a.role}) under ${a.approval_id}.`);
+      return;
+    }
+    decide(w, "unapproved_admin_action", `${e.action} by ${e.actor} ${problem}.`);
+    newAlert("unapproved_admin_action", "high", [w], w, [e.source_service, e.target_service],
+      `${e.actor} performed ${e.action} that ${problem}.`,
+      "Shows an administrative action without matching change control; does not show its effect.");
+  }
+
+  // ---- pass 2: unexpected service edges -> lateral movement (goal 7) ---------------
+  const unexpectedEdge = (e: LogEvent) => !policy.knownEdges.has(edgeKey(e.source_service, e.target_service));
+  for (const w of live) {
+    if (unexpectedEdge(w.e)) {
+      w.c.flags.push("unexpected_edge");
+      if (policy.outOfScopeServices.has(w.e.target_service) ||
+          policy.outOfScopeActions.has(`${w.e.target_service}:${w.e.action}`)) {
+        w.c.flags.push("out_of_scope");
+      }
+    }
+  }
+  const edgeCandidates = byTime.filter((w) => !w.decided && unexpectedEdge(w.e));
+  const clusters: Work[][] = [];
+  const openByActor = new Map<string, Work[][]>();
+  for (const w of edgeCandidates) {
+    const open = openByActor.get(w.e.actor) ?? [];
+    const home = open.find((cl) =>
+      w.t - cl[0].t <= policy.lateral.windowMs &&
+      cl.some((m) =>
+        (w.e.session_id !== "" && m.e.session_id === w.e.session_id) ||
+        (w.e.correlation_id !== "" && m.e.correlation_id === w.e.correlation_id)));
+    if (home) home.push(w);
+    else {
+      const cl = [w];
+      open.push(cl);
+      clusters.push(cl);
+    }
+    openByActor.set(w.e.actor, open);
+  }
+  for (const cl of clusters) {
+    const edges = new Set(cl.map((w) => edgeKey(w.e.source_service, w.e.target_service)));
+    if (edges.size < policy.lateral.minDistinctEdges) continue;
+    // Time-to-alert: the event whose arrival brought the distinct-edge count to the threshold.
+    const byReceipt = [...cl].sort((a, b) => a.c.receipt_index - b.c.receipt_index);
+    const counted = new Set<string>();
+    let trigger = byReceipt[0];
+    for (const w of byReceipt) {
+      counted.add(edgeKey(w.e.source_service, w.e.target_service));
+      if (counted.size === policy.lateral.minDistinctEdges) { trigger = w; break; }
+    }
+    const path = [cl[0].e.source_service, ...cl.map((w) => w.e.target_service)];
+    const anyAllowed = cl.some((w) => ALLOWED.has(w.e.outcome));
+    const outcomes = anyAllowed
+      ? `${cl.filter((w) => ALLOWED.has(w.e.outcome)).length} of ${cl.length} requests were ALLOWED`
+      : `all ${cl.length} requests were denied`;
+    const alert = newAlert("lateral_movement_candidate", anyAllowed ? "high" : "medium", cl, trigger, path,
+      `${cl[0].e.actor} touched ${edges.size} unexpected service edges (${path.join(" -> ")}) within ${fmtMs(cl[cl.length - 1].t - cl[0].t)}; ${outcomes}.`,
+      anyAllowed
+        ? "Allowed requests on unexpected edges need investigation; this is a candidate sequence, not proof of compromise."
+        : "Denied requests: a candidate movement attempt, not successful access or compromise.");
+    cl.forEach((w, k) => {
+      decide(w, "lateral_movement_candidate",
+        `Unexpected edge ${w.e.source_service} -> ${w.e.target_service} (${k + 1} of ${cl.length}) in ${alert.alert_id}, same actor ${w.e.actor} and session/flow within ${fmtMs(policy.lateral.windowMs)}; outcome ${w.e.outcome}.`);
+    });
+  }
+
+  // ---- pass 3: everything else ------------------------------------------------------
+  for (const w of byTime) {
+    if (w.decided) continue;
+    const e = w.e;
+    const allowed = ALLOWED.has(e.outcome);
+    const denied = DENIED.has(e.outcome);
+
+    // Activity that follows an unauthorized role change in the same session.
+    const taint = e.session_id === "" ? undefined : taints.get(sessionKey(e.actor, e.session_id));
+    if (taint && allowed && w.t > taint.t && w.t - taint.t <= policy.reviewAfterRoleChangeWindowMs) {
+      decide(w, "review_after_role_change",
+        `Allowed ${e.action} on ${e.target_service} follows unexpected role change ${taint.eventId} in ${e.session_id} (${taint.alert.alert_id}); review what the new role was used for.`);
+      attach(taint.alert, w);
+      continue;
+    }
+
+    if (unexpectedEdge(e)) {
+      const scope = w.c.flags.includes("out_of_scope") ? " (outside this service's expected scope)" : "";
+      if (denied) {
+        decide(w, "isolated_denial",
+          `Single unexpected edge ${e.source_service} -> ${e.target_service}${scope} was denied; one denial alone does not establish lateral movement.`);
+      } else {
+        decide(w, "unexpected_access",
+          `Unexpected edge ${e.source_service} -> ${e.target_service}${scope} with outcome ${e.outcome}.`);
+        newAlert("unexpected_access", allowed ? "high" : "medium", [w], w, [e.source_service, e.target_service],
+          `${e.actor} used unexpected edge ${e.source_service} -> ${e.target_service}${scope} (${e.outcome}).`,
+          "A single edge outside the baseline; may be a new legitimate dependency.");
+      }
+      continue;
+    }
+
+    const role = e.role_before;
+    if (denied) {
+      const revs = revocationsBy(e.actor, w.t).filter((r) => roleReach(e.actor, r.role).has(e.target_service));
+      if (revs.length > 0) {
+        const r = revs[revs.length - 1];
+        w.c.flags.push("after_revocation");
+        decide(w, "routine_denial",
+          `${e.target_service} denied after ${r.approval_id} revoked ${r.role} for ${e.actor} (effective ${r.effective_at_utc}); revocation is being enforced.`);
+      } else {
+        decide(w, "routine_denial",
+          `${e.target_service} denied for role ${role} on a known edge; access control working as expected.`);
+      }
+      continue;
+    }
+
+    if (allowed) {
+      const scoped = grantsFor(e.actor, role).filter((g) => g.scope.includes(e.target_service));
+      const revoked = revocationsBy(e.actor, w.t).filter((r) => r.role === role);
+      if (revoked.length > 0) {
+        const r = revoked[revoked.length - 1];
+        flagOutsideApproval(w, `still allowed while acting as ${role} after ${r.approval_id} revoked it (effective ${r.effective_at_utc})`);
+        continue;
+      }
+      if (scoped.length > 0) {
+        const valid = scoped.find((g) => inWindow(g, w.t));
+        if (!valid) {
+          flagOutsideApproval(w, `allowed outside the validity of ${scoped.map((g) => g.approval_id).join(", ")}`);
+          continue;
+        }
+        routine(w, `${e.action} on ${e.target_service} as ${role} within ${valid.approval_id} scope and validity.`);
+        continue;
+      }
+      if (!policy.roles.has(role)) {
+        decide(w, "unexpected_access", `Role ${role} is not in the baseline policy; allowed ${e.action} on ${e.target_service}.`);
+        newAlert("unexpected_access", "medium", [w], w, [e.source_service, e.target_service],
+          `${e.actor} acted with unknown role ${role} on ${e.target_service}.`, "Baseline may be incomplete.");
+        continue;
+      }
+      if (!policy.roles.get(role)!.has(e.target_service)) {
+        decide(w, "unexpected_access", `Role ${role} does not normally reach ${e.target_service}, yet ${e.action} was allowed.`);
+        newAlert("unexpected_access", "medium", [w], w, [e.source_service, e.target_service],
+          `${e.actor} (${role}) was allowed ${e.action} on ${e.target_service}, outside the role's baseline.`,
+          "Shows an allowed request outside the baseline; does not show misuse.");
+        continue;
+      }
+      const after = revocationsBy(e.actor, w.t);
+      const note = after.length > 0
+        ? ` ${after[after.length - 1].approval_id} revoked ${after[after.length - 1].role}, but ${role} still covers ${e.target_service}.`
+        : "";
+      if (note) w.c.flags.push("after_revocation");
+      routine(w, `${e.action} on ${e.target_service} is normal for role ${role}.${note}`);
+      continue;
+    }
+
+    routine(w, `Outcome "${e.outcome}" on a known edge; no rule applies.`);
+  }
+
+  function flagOutsideApproval(w: Work, why: string) {
+    const e = w.e;
+    decide(w, "access_outside_approval", `${e.action} on ${e.target_service} ${why}.`);
+    newAlert("access_outside_approval", "high", [w], w, [e.source_service, e.target_service],
+      `${e.actor} accessed ${e.target_service}: ${why}.`,
+      "Shows access outside change control; check revocation propagation and approval records.");
+  }
+
+  /** Routine, refined by clock findings (delivery order is explained separately from offset). */
+  function routine(w: Work, reason: string) {
+    const d: DelayNote | undefined = delays.get(w.e.event_id);
+    const t = w.c.time;
+    if (d) {
+      decide(w, "routine_delayed_delivery",
+        `${reason} Occurred ${fmtMs(d.occurredEarlierByMs)} before ${d.arrivedAfter} but arrived after it (collector delay ${fmtMs(t.collector_delay_ms)}); delivery order, not replay.`);
+    } else if (w.e.source_clock_offset_ms !== 0) {
+      const neg = w.c.flags.includes("negative_raw_delay") ? " Raw timestamps show a negative delay, explained by the offset." : "";
+      const skew = w.c.flags.includes("unsupported_skew")
+        ? ` Offset exceeds the supported ${fmtMs(policy.clock.maxSupportedSkewMs)}; order with other events is unreliable.` : "";
+      decide(w, "routine_clock_offset",
+        `${reason} Source clock offset ${w.e.source_clock_offset_ms > 0 ? "+" : ""}${w.e.source_clock_offset_ms} ms: corrected event time ${t.corrected_event_utc} (±${fmtMs(t.uncertainty_ms)}), collector delay ${fmtMs(t.collector_delay_ms)}.${neg}${skew}`);
+    } else {
+      decide(w, "routine", reason);
+    }
+  }
+
+  const timeline = byTime.map((w) => w.e.event_id);
+  return { events: all.map((w) => w.c), alerts, timeline };
+}
+
+function decide(w: Work, label: Label, reason: string) {
+  w.c.label = label;
+  w.c.reason = reason;
+  w.decided = true;
+}
