@@ -1,7 +1,7 @@
 import { spawn, spawnSync } from "node:child_process";
 import type { ChildProcess } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { copyFileSync, existsSync, mkdirSync, readFileSync, rmSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
@@ -18,6 +18,8 @@ const STATE = join(tmpdir(), "tbv-dashboard");
 const SNAPSHOT = join(tmpdir(), "tbv-dashboard-snapshot.json");
 const WITNESS = join(tmpdir(), "tbv-dashboard-witness");
 const CLUSTER = join(tmpdir(), "tbv-dashboard-cluster");
+const SESSION = join(tmpdir(), "tbv-dashboard-session.json");
+const SESSION_KEYS = ["checklist", "lastRead", "verify", "detector", "chat", "attackResults", "ripple"];
 const NODE_NAMES = ["node-a", "node-b", "node-c"];
 // Node processes survive between requests (and dev hot reloads) on globalThis.
 const g = globalThis as unknown as { __tbvNodes?: Map<string, ChildProcess> };
@@ -86,8 +88,20 @@ export async function POST(request: Request) {
   };
   try {
     switch (body.action) {
+      case "session-get":
+        return Response.json({ ok: true, out: existsSync(SESSION) ? JSON.parse(readFileSync(SESSION, "utf8")) : {} });
+      case "session-set": {
+        // Demo panels shared by every open console (both laptops) and kept across refreshes.
+        const s = (body.session ?? {}) as Record<string, unknown>;
+        const kept = Object.fromEntries(SESSION_KEYS.filter((k) => k in s).map((k) => [k, s[k]]));
+        const text = JSON.stringify(kept);
+        if (text.length > 256 * 1024) throw new Error("session too large");
+        writeFileSync(SESSION, text);
+        return Response.json({ ok: true, out: { saved: true } });
+      }
       case "reset":
         rmSync(SNAPSHOT, { force: true });
+        rmSync(SESSION, { force: true });
         return Response.json(adapter({ ...DEMO, key_material: `synthetic-${randomBytes(8).toString("hex")}` }));
       case "setup":
         return Response.json(adapter({ ...DEMO, key_material: `synthetic-${randomBytes(8).toString("hex")}` }));

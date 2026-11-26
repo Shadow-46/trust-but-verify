@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Bell, Check, Crosshair, FileText, KeyRound, LayoutGrid, MessagesSquare, Network, ScrollText, ShieldCheck, ShieldX, Users, X } from "lucide-react";
 import { animate, motion } from "motion/react";
 import { Tour } from "@/components/tour";
@@ -205,6 +205,30 @@ export default function Console() {
     void api("evidence").then((r) => setEv(r.out));
     void api("attacks").then((r) => setAttacks(Array.isArray(r.out) ? r.out : []));
   }, [refresh]);
+
+  // Demo panels (checklist results, last decision, verification, detector run, chat, attack results)
+  // live on the server, so a refresh or a second laptop sees the same session.
+  const sessionLoaded = useRef(false);
+  useEffect(() => {
+    void api("session-get").then((r) => {
+      const s = (r.out ?? {}) as Record<string, any>;
+      if (Array.isArray(s.checklist)) setResults(s.checklist);
+      if (s.lastRead) setLastRead(s.lastRead);
+      if (s.verify) setVerify(s.verify);
+      if (s.detector) setDet(s.detector);
+      if (s.chat) setChat(s.chat);
+      if (s.attackResults) setAttackResults(s.attackResults);
+      if (typeof s.ripple === "string") setRipple(s.ripple);
+      sessionLoaded.current = true;
+    });
+  }, []);
+  useEffect(() => {
+    if (!sessionLoaded.current) return;
+    const t = setTimeout(() => {
+      void api("session-set", { session: { checklist: results, lastRead, verify, detector: det, chat, attackResults, ripple } });
+    }, 300);
+    return () => clearTimeout(t);
+  }, [results, lastRead, verify, det, chat, attackResults, ripple]);
 
   const read = async (who: string, file: string) => {
     const res = await run("read", { actor: who, asset: file });
