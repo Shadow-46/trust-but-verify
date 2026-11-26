@@ -7,6 +7,14 @@ import { withLock } from "../store/fsx.js";
 import { assetAad, dataKey, openContext } from "../vault.js";
 import { newDataKey, wrapDataKey } from "./keystore.js";
 
+/**
+ * Fault injection for crash-recovery tests only: TBV_TEST_CRASH names the point at
+ * which the process is killed. Unset in normal operation.
+ */
+function crashPoint(name        )       {
+  if (process.env.TBV_TEST_CRASH === name) process.kill(process.pid, "SIGKILL");
+}
+
                                                                                
 
 /**
@@ -44,7 +52,9 @@ export function rotateStoredDataKey(paths            )                 {
     } finally {
       newKey.fill(0);
     }
-    saveState(paths, ctx.keys.stateMac, state);
+    crashPoint("rotation_before_commit");
+    saveState(paths, ctx.keys.stateMac, state); // single atomic commit point
+    crashPoint("rotation_after_commit");
     appendAudit(paths, {
       type: "key_rotation",
       request_id: null,
@@ -52,6 +62,7 @@ export function rotateStoredDataKey(paths            )                 {
       asset: null,
       decision: null,
       reason: `v${from}->v${to}`,
+      state_version: state.version,
     });
     return { from, to, reencrypted };
   });

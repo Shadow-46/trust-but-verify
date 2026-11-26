@@ -6,6 +6,14 @@ import type { StatePaths } from "../store/paths.ts";
 import { assetAad, dataKey, openContext } from "../vault.ts";
 import { newDataKey, wrapDataKey } from "./keystore.ts";
 
+/**
+ * Fault injection for crash-recovery tests only: TBV_TEST_CRASH names the point at
+ * which the process is killed. Unset in normal operation.
+ */
+function crashPoint(name: string): void {
+  if (process.env.TBV_TEST_CRASH === name) process.kill(process.pid, "SIGKILL");
+}
+
 export type RotationResult = { from: number; to: number; reencrypted: number };
 
 /**
@@ -43,7 +51,9 @@ export function rotateStoredDataKey(paths: StatePaths): RotationResult {
     } finally {
       newKey.fill(0);
     }
-    saveState(paths, ctx.keys.stateMac, state);
+    crashPoint("rotation_before_commit");
+    saveState(paths, ctx.keys.stateMac, state); // single atomic commit point
+    crashPoint("rotation_after_commit");
     appendAudit(paths, {
       type: "key_rotation",
       request_id: null,
@@ -51,6 +61,7 @@ export function rotateStoredDataKey(paths: StatePaths): RotationResult {
       asset: null,
       decision: null,
       reason: `v${from}->v${to}`,
+      state_version: state.version,
     });
     return { from, to, reencrypted };
   });
