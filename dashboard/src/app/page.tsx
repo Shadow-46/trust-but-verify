@@ -1,7 +1,10 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Bell, Check, FileText, KeyRound, LayoutGrid, Network, ScrollText, Users, X } from "lucide-react";
+import { Bell, Check, FileText, KeyRound, LayoutGrid, Network, ScrollText, ShieldX, Users, X } from "lucide-react";
+import { animate, motion } from "motion/react";
+import { Tour } from "@/components/tour";
+import type { TourStep } from "@/components/tour";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -52,9 +55,9 @@ function Th({ children, className = "" }: { children?: React.ReactNode; classNam
 function Td({ children, className = "" }: { children?: React.ReactNode; className?: string }) {
   return <td className={`border-b border-[#EEF0F2] px-4 py-2.5 align-top ${className}`}>{children}</td>;
 }
-function Panel({ title, action, children }: { title: string; action?: React.ReactNode; children: React.ReactNode }) {
+function Panel({ title, action, children, tour }: { title: string; action?: React.ReactNode; children: React.ReactNode; tour?: string }) {
   return (
-    <section className="rounded-lg border border-[#E3E5E8] bg-white">
+    <section data-tour={tour} className="rounded-lg border border-[#E3E5E8] bg-white">
       <div className="flex items-center justify-between gap-4 border-b border-[#E3E5E8] px-4 py-3">
         <h2 className="text-sm font-semibold">{title}</h2>
         {action}
@@ -69,7 +72,7 @@ function Stats({ items }: { items: { label: string; value: string; note: string 
       {items.map((s, i) => (
         <div key={s.label} className={`px-4 py-3 ${i > 0 ? "border-t border-[#E3E5E8] sm:border-t-0 sm:border-l" : ""}`}>
           <div className="text-xs text-[#5C6370]">{s.label}</div>
-          <div className="mt-1 text-xl font-semibold tabular-nums">{s.value}</div>
+          <CountUp value={s.value} />
           <div className="text-xs text-[#5C6370]">{s.note}</div>
         </div>
       ))}
@@ -77,6 +80,23 @@ function Stats({ items }: { items: { label: string; value: string; note: string 
   );
 }
 const primary = "bg-[#1D4ED8] text-white hover:bg-[#1A43B8]";
+
+/** Counts a leading number up from zero whenever the value changes (e.g. "19 ms"). */
+function CountUp({ value }: { value: string }) {
+  const [shown, setShown] = useState(value);
+  useEffect(() => {
+    const m = value.match(/^(\d+(?:\.\d+)?)(.*)$/);
+    if (!m) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setShown(value);
+      return;
+    }
+    const decimals = (m[1].split(".")[1] ?? "").length;
+    const c = animate(0, parseFloat(m[1]), { duration: 0.9, ease: "easeOut", onUpdate: (v) => setShown(v.toFixed(decimals) + m[2]) });
+    return () => c.stop();
+  }, [value]);
+  return <div className="mt-1 text-xl font-semibold tabular-nums">{shown}</div>;
+}
 
 // ---------- guided scenario ----------
 type Step = { title: string; expect: string; run: () => Promise<{ pass: boolean; actual: string }> };
@@ -103,6 +123,7 @@ export default function Console() {
   const [det, setDet] = useState<any>(null);
   const [scenarioOpen, setScenarioOpen] = useState(false);
   const [results, setResults] = useState<({ pass: boolean; actual: string } | null)[]>([]);
+  const [touring, setTouring] = useState(false);
 
   const refresh = useCallback(async () => {
     const [l, s] = await Promise.all([api("log"), api("state")]);
@@ -168,6 +189,32 @@ export default function Console() {
     }
   };
 
+  const ok = (text: string) => ({ text, tone: "good" as const });
+  const bad = (text: string) => ({ text, tone: "bad" as const });
+  const readAs = async (who: string) => {
+    const r = await run("read", { actor: who, asset: "design-doc" });
+    setLastRead({ who, file: "design-doc", res: r });
+    return r;
+  };
+  const tourSteps: TourStep<Section>[] = [
+    { section: "overview", target: "hero", title: "Every access decision, explained", body: "This console drives the same service the judges call. We start clean: three encrypted files owned by maya and omar.", run: async () => { await run("reset"); setResults([]); setVerify(null); setDet(null); setLastRead(null); return ok("Demo reset: files encrypted, signed audit log started"); } },
+    { section: "files", target: "files", title: "maya opens her design doc", body: "Every request is checked: does the file exist, does maya own it, is she revoked or disabled. The decision is signed into the log before the reply.", run: async () => { const r = await readAs("maya"); return r.out?.decision === "allow" ? ok("Allowed: contents returned") : bad(decisionText(r)); } },
+    { section: "files", target: "files", title: "Someone else tries the same file", body: "omar is a valid user but not the owner. Being signed in is not enough.", run: async () => { const r = await readAs("omar"); return r.out?.decision === "deny" ? ok("Denied: omar does not own design-doc") : bad(decisionText(r)); } },
+    { section: "files", target: "files", title: "An attacker copies the state file", body: "We simulate an attacker with disk access quietly saving a copy of today's state. It comes back later.", run: async () => { const r = await run("snapshot"); return r.ok ? { text: "Copy saved on the attacker's side", tone: "neutral" as const } : bad("Copy failed"); }, dwell: 5000 },
+    { section: "users", target: "users", title: "maya's laptop is lost", body: "The operator reports the device lost. The revocation is persisted and signed before it is acknowledged.", run: async () => { const r = await run("revoke", { actor: "maya" }); return r.ok ? ok("maya revoked") : bad("Revocation failed"); } },
+    { section: "files", target: "files", title: "The lost laptop tries again", body: "Same identity, same file, moments later.", run: async () => { const r = await readAs("maya"); return r.out?.decision === "deny" ? ok("Denied: identity revoked after device loss") : bad(decisionText(r)); } },
+    { section: "overview", target: "hero", title: "The reason, in plain language", body: "Anyone can read exactly why access was blocked, next to the signed record that proves it.", dwell: 6000 },
+    { section: "files", target: "files", title: "The attacker restores the old copy", body: "To undo the revocation, the attacker writes the earlier state file back. It is validly authenticated, just old.", run: async () => { const r = await run("rollback"); return r.ok ? { text: "Old state written back to disk", tone: "neutral" as const } : bad("Restore failed"); }, dwell: 5000 },
+    { section: "files", target: "blocked-banner", title: "Attack blocked", body: "The state's version no longer matches the ML-DSA-signed audit log head, so the service fails closed instead of trusting the disk.", run: async () => { const r = await readAs("maya"); return r.blocked ? ok("Refused: integrity check failed, nothing returned") : bad(decisionText(r)); }, dwell: 8000 },
+    { section: "overview", target: "reset-btn", title: "The operator recovers", body: "In production this is a restore from a verified, signed backup that keeps every later revocation. Here we reset and replay the revocation.", run: async () => { await run("reset"); await readAs("maya"); await run("revoke", { actor: "maya" }); await readAs("maya"); setLastRead(null); return ok("Service healthy, maya still revoked"); } },
+    { section: "audit", target: "audit", title: "A tamper-evident trail", body: "Every allow and every block is hash-chained and signed with ML-DSA-65. Anyone with the public key can verify it.", run: async () => { const r = await run("verify"); setVerify(r.out); return r.out?.ok ? ok(`Log verified: ${r.out.records} records, all signatures valid`) : bad("Log verification failed"); } },
+    { section: "keys", target: "keys", title: "Rotating the data key", body: "A new key version re-encrypts every file in one atomic step. The old version is retired.", run: async () => { const r = await run("rotate"); return r.ok ? ok(`Rotated v${r.out.from} to v${r.out.to}, ${r.out.reencrypted} files re-encrypted`) : bad("Rotation refused"); } },
+    { section: "nodes", target: "nodes-stats", title: "Revocation reaches every node", body: "Three separate node processes pull an ML-DSA-signed, epoch-versioned policy and refuse forged or older versions.", run: async () => (ev?.cluster ? ok(`Median ${ev.cluster.revocation_propagation_ms.median} ms, worst case ${ev.cluster.revocation_propagation_ms.max} ms`) : undefined) },
+    { section: "nodes", target: "nodes-checks", title: "Rotation with a documented cutoff", body: "The old key is accepted until the cutoff, then rejected everywhere, while transfers that already started finish.", dwell: 6000 },
+    { section: "alerts", target: "alerts", title: "Catching misuse of valid credentials", body: "An explainable detector (rules, approvals and a service graph, no ML) analyses a fresh access log with hidden incidents.", run: async () => { const r = await run("detect", { seed: Math.floor(Math.random() * 1e6) }); setDet(r.out); return r.out?.alerts ? ok(`${r.out.alerts.length} alerts for ${r.out.incidents.length} hidden incidents`) : bad("Analysis failed"); }, dwell: 8000 },
+    { section: "overview", target: "kpis", title: "Verified, not claimed", body: "Official validator 22/22 in the judges' runtime, revocation in about 20 ms, every decision explained and signed. Thank you.", dwell: 7000 },
+  ];
+
   const latest = log.find((r) => r.type === "access_decision" || r.type === "duplicate_request_id");
   const filtered = log.filter((r) => filter === "all" || r.decision === filter);
   const cl = ev?.cluster;
@@ -218,22 +265,27 @@ export default function Console() {
           <div className="flex items-center gap-2">
             <h1 className="text-[15px] font-semibold">{title}</h1>
             <span className="rounded border border-[#E3E5E8] bg-white px-1.5 py-0.5 text-[11px] text-[#5C6370]">Demo environment</span>
+            <span className="inline-flex items-center gap-1.5 text-[11px] text-[#5C6370]"><span className="relative flex size-2"><span className={`absolute inline-flex size-full animate-ping rounded-full opacity-60 ${failClosed ? "bg-[#B42318]" : "bg-[#0F7B4F]"}`} /><span className={`relative inline-flex size-2 rounded-full ${failClosed ? "bg-[#B42318]" : "bg-[#0F7B4F]"}`} /></span>{failClosed ? "Fail-closed" : "Live"}</span>
           </div>
           <div className="flex gap-2">
-            <Button variant="outline" size="sm" disabled={busy} onClick={async () => { await run("reset"); setResults([]); toast("Demo reset"); }}>Reset demo</Button>
-            <Button size="sm" className={primary} onClick={() => setScenarioOpen(true)}>Run scenario</Button>
+            <Button data-tour="reset-btn" variant="outline" size="sm" disabled={busy} onClick={async () => { await run("reset"); setResults([]); toast("Demo reset"); }}>Reset demo</Button>
+            <Button variant="outline" size="sm" onClick={() => setScenarioOpen(true)}>Checklist</Button>
+            <Button size="sm" className={primary} onClick={() => setTouring(true)}>Start walkthrough</Button>
           </div>
         </header>
 
-        <main className="mx-auto max-w-[1120px] space-y-5 px-6 py-6">
+        <motion.main key={section} initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.28, ease: "easeOut" }} className="mx-auto max-w-[1120px] space-y-5 px-6 py-6">
           {failClosed && (
-            <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-[#F1C9C5] bg-[#FDF3F2] px-4 py-3 text-sm">
+            <motion.div data-tour="blocked-banner" initial={{ opacity: 0, y: -6 }} animate={{ opacity: 1, y: 0, x: [0, -6, 6, -4, 4, 0] }} transition={{ duration: 0.6 }} className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-[#F1C9C5] bg-[#FDF3F2] px-4 py-3 text-sm">
+              <div className="flex items-start gap-3">
+                <motion.span initial={{ scale: 0, rotate: -25 }} animate={{ scale: 1, rotate: 0 }} transition={{ type: "spring", stiffness: 260, damping: 12, delay: 0.15 }}><ShieldX className="mt-0.5 size-5 text-[#B42318]" /></motion.span>
               <div>
                 <span className="font-medium text-[#B42318]">The service is refusing all requests.</span>{" "}
                 <span className="text-[#5C6370]">Stored state no longer matches the signed audit log, so nothing is trusted until an operator restores a verified backup.</span>
               </div>
+              </div>
               <Button size="sm" variant="outline" disabled={busy} onClick={async () => { await run("reset"); setResults([]); }}>Reset demo</Button>
-            </div>
+            </motion.div>
           )}
           {!state && !failClosed && (
             <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-[#E3E5E8] bg-white px-4 py-3 text-sm">
@@ -244,27 +296,27 @@ export default function Console() {
 
           {section === "overview" && (
             <>
-              <section className="rounded-lg border border-[#E3E5E8] bg-white px-6 py-6">
+              <section data-tour="hero" className="rounded-lg border border-[#E3E5E8] bg-white px-6 py-6">
                 <div className="text-xs text-[#5C6370]">Latest access decision{latest ? `, ${time(latest.ts)}` : ""}</div>
                 {latest ? (
-                  <p className="mt-2 max-w-[60ch] text-2xl leading-snug font-medium tracking-tight">
+                  <motion.p key={latest.seq} initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.4, ease: "easeOut" }} className="mt-2 max-w-[60ch] text-2xl leading-snug font-medium tracking-tight">
                     {latest.actor} was{" "}
                     <span className={latest.decision === "allow" ? "text-[#0F7B4F]" : "text-[#B42318]"}>{latest.decision === "allow" ? "allowed to read" : "denied access to"}</span>{" "}
                     {latest.asset} because {BECAUSE[latest.reason ?? ""] ?? latest.reason}.
-                  </p>
+                  </motion.p>
                 ) : (
                   <p className="mt-2 text-2xl font-medium tracking-tight text-[#5C6370]">No decisions yet. Open a file from the Files page or run the scenario.</p>
                 )}
                 {latest && <div className="mt-3 font-mono text-xs text-[#5C6370]">Signed record #{latest.seq}, hash {latest.hash}</div>}
               </section>
-              <Stats
+              <div data-tour="kpis"><Stats
                 items={[
                   { label: "Official validator", value: "22 / 22", note: "Node 24.11.1, offline" },
                   { label: "Revocation reaches all nodes", value: cl ? `${cl.revocation_propagation_ms.median} ms` : "–", note: cl ? `worst case ${cl.revocation_propagation_ms.max} ms` : "" },
                   { label: "Detector F1", value: d0 ? String(d0.standard.aggregate.f1) : "–", note: d0 ? `${d0.standard.aggregate.false_alerts_per_1000_benign} false alerts per 1,000 events` : "" },
                   { label: "Time per request", value: "37 ms", note: "including a signed audit record" },
                 ]}
-              />
+              /></div>
               <Panel title="Recent decisions" action={<button className="text-sm text-[#1D4ED8] hover:underline" onClick={() => setSection("audit")}>Open audit log</button>}>
                 <DecisionTable rows={log.filter((r) => r.decision).slice(0, 6)} />
               </Panel>
@@ -273,6 +325,7 @@ export default function Console() {
 
           {section === "files" && (
             <Panel
+              tour="files"
               title="Protected files"
               action={
                 <div className="flex items-center gap-2 text-sm text-[#5C6370]">
@@ -314,7 +367,7 @@ export default function Console() {
           )}
 
           {section === "users" && (
-            <Panel title="Users and devices">
+            <Panel title="Users and devices" tour="users">
               <table className="w-full text-sm">
                 <thead><tr><Th>User</Th><Th>Status</Th><Th>Owns</Th><Th className="text-right">Action</Th></tr></thead>
                 <tbody>
@@ -348,6 +401,7 @@ export default function Console() {
                 </div>
               )}
               <Panel
+                tour="audit"
                 title="Signed audit log"
                 action={
                   <div className="flex items-center gap-2">
@@ -368,7 +422,7 @@ export default function Console() {
           )}
 
           {section === "keys" && (
-            <Panel title="Data keys" action={<Button size="sm" className={primary} disabled={busy || !state} onClick={() => setConfirm({ kind: "rotate" })}>Rotate key</Button>}>
+            <Panel tour="keys" title="Data keys" action={<Button size="sm" className={primary} disabled={busy || !state} onClick={() => setConfirm({ kind: "rotate" })}>Rotate key</Button>}>
               <table className="w-full text-sm">
                 <thead><tr><Th>Version</Th><Th>Status</Th><Th>Created</Th><Th>Protects</Th></tr></thead>
                 <tbody>
@@ -388,15 +442,15 @@ export default function Console() {
 
           {section === "nodes" && cl && (
             <>
-              <Stats
+              <div data-tour="nodes-stats"><Stats
                 items={[
                   { label: "Median time to revoke everywhere", value: `${cl.revocation_propagation_ms.median} ms`, note: "publish to last node enforcing" },
                   { label: "Worst case", value: `${cl.revocation_propagation_ms.max} ms`, note: `${cl.config.samples} measurements` },
                   { label: "Nodes", value: String(cl.config.nodes.length), note: "separate processes" },
                   { label: "Key rotation grace", value: "30 s", note: `${cl.config.grace_ms / 1000} s in this run` },
                 ]}
-              />
-              <Panel title="Cluster checks">
+              /></div>
+              <Panel title="Cluster checks" tour="nodes-checks">
                 <table className="w-full text-sm">
                   <thead><tr><Th>Check</Th><Th>Expected</Th><Th>Observed on node-a</Th><Th className="text-right">Result</Th></tr></thead>
                   <tbody>
@@ -424,7 +478,7 @@ export default function Console() {
                   { label: "Evaluated", value: `${d0.standard.aggregate.incidents + d0.hard.aggregate.incidents}`, note: "injected incidents, 20 runs" },
                 ]}
               />
-              <Panel title="Suspicious activity" action={<Button size="sm" className={primary} disabled={busy} onClick={async () => setDet((await run("detect", { seed: Math.floor(Math.random() * 1e6) })).out)}>Analyze a new log</Button>}>
+              <Panel tour="alerts" title="Suspicious activity" action={<Button size="sm" className={primary} disabled={busy} onClick={async () => setDet((await run("detect", { seed: Math.floor(Math.random() * 1e6) })).out)}>Analyze a new log</Button>}>
                 {!det && <p className="px-4 py-8 text-center text-sm text-[#5C6370]">Analyze a freshly generated access log to see what the detector flags and why.</p>}
                 {det && (
                   <ul>
@@ -447,8 +501,10 @@ export default function Console() {
               </Panel>
             </>
           )}
-        </main>
+        </motion.main>
       </div>
+
+      <Tour steps={tourSteps} open={touring} onClose={() => setTouring(false)} go={setSection} />
 
       <Dialog open={confirm !== null} onOpenChange={(o) => !o && setConfirm(null)}>
         <DialogContent>
@@ -522,7 +578,7 @@ function DecisionTable({ rows, full = false }: { rows: Row[]; full?: boolean }) 
         </thead>
         <tbody>
           {rows.map((r) => (
-            <tr key={r.seq}>
+            <motion.tr key={r.seq} layout initial={{ opacity: 0, x: -8, backgroundColor: r.decision === "deny" ? "#FDECEA" : r.decision === "allow" ? "#E7F5EE" : "#EEF2FF" }} animate={{ opacity: 1, x: 0, backgroundColor: "rgba(255,255,255,0)" }} transition={{ duration: 1.4, ease: "easeOut" }}>
               <Td className="font-mono text-xs text-[#5C6370]">{r.seq}</Td>
               <Td className="tabular-nums text-[#5C6370]">{time(r.ts)}</Td>
               <Td>{r.type === "access_decision" ? "Access request" : r.type === "revoke" ? "Device reported lost" : r.type === "key_rotation" ? "Key rotated" : r.type === "setup" ? "Demo set up" : r.type.replace(/_/g, " ")}</Td>
@@ -531,7 +587,7 @@ function DecisionTable({ rows, full = false }: { rows: Row[]; full?: boolean }) 
               <Td><Status d={r.decision} /></Td>
               <Td className="text-[#5C6370]">{r.reason ? (SHORT[r.reason] ?? r.reason) : ""}</Td>
               {full && <Td className="font-mono text-xs text-[#5C6370]">{r.hash}</Td>}
-            </tr>
+            </motion.tr>
           ))}
         </tbody>
       </table>
