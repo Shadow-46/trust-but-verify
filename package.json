@@ -11,6 +11,7 @@
     "build": "node tools/build.mjs",
     "demo:cluster": "node dist/core/demo/clusterDemo.js",
     "test": "node --test \"tests/**/*.test.ts\"",
-    "ops": "node dist/core/ops.js"
+    "ops": "node dist/core/ops.js",
+    "demo:detector": "node dist/core/detector/evaluate.js"
   }
 }
