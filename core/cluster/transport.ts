@@ -1,0 +1,111 @@
+import { createServer } from "node:http";
+import type { IncomingMessage, Server, ServerResponse } from "node:http";
+import type { AddressInfo } from "node:net";
+import { readTextIfExists } from "../store/fsx.ts";
+import { controlPaths } from "./control.ts";
+import type { ClusterNode, SyncResult } from "./node.ts";
+
+/**
+ * Network transport for policy distribution (replaces the shared filesystem).
+ *
+ * The control plane serves its published, ML-DSA-signed policy over HTTP; nodes
+ * poll it. The transport needs no secrecy and is not trusted for integrity: a
+ * node accepts bytes only if the signature verifies against its provisioned
+ * anchor, the epoch is newer, and it is not below the provisioning floor. Every
+ * poll carries the node's current epoch, so the control plane observes each
+ * adoption on ITS OWN clock (no shared-clock assumption between machines).
+ */
+
+export const MAX_POLICY_BYTES = 1 << 20;
+
+export type PolicyServer = {
+  port: number;
+  /** First time the control plane saw each node report each epoch (control-plane clock, ms). */
+  acks: Map<string, Map<number, number>>;
+  close: () => Promise<void>;
+};
+
+const NODE_NAME = /^[A-Za-z0-9._-]{1,64}$/;
+
+export function servePolicy(controlDir: string, port = 0, host = "127.0.0.1"): Promise<PolicyServer> {
+  const published = controlPaths(controlDir).published;
+  const acks = new Map<string, Map<number, number>>();
+  const server = createServer((req: IncomingMessage, res: ServerResponse) => {
+    if (req.method !== "GET" || req.url !== "/policy") {
+      res.writeHead(404).end();
+      return;
+    }
+    const name = String(req.headers["x-node"] ?? "");
+    const epoch = Number(req.headers["x-epoch"] ?? "NaN");
+    if (NODE_NAME.test(name) && Number.isSafeInteger(epoch) && epoch >= 0) {
+      const seen = acks.get(name) ?? new Map<number, number>();
+      if (!seen.has(epoch)) seen.set(epoch, Date.now());
+      acks.set(name, seen);
+    }
+    const text = readTextIfExists(published);
+    if (!text) {
+      res.writeHead(503).end();
+      return;
+    }
+    res.writeHead(200, { "content-type": "application/json", "cache-control": "no-store" }).end(text);
+  });
+  return listen(server, port, host).then((p) => ({ port: p, acks, close: () => closeServer(server) }));
+}
+
+export type PullResult = SyncResult | { status: "unreachable"; epoch: number; reason: string };
+
+/** One poll: fetch the signed policy over the network and hand the untrusted bytes to the node. */
+export async function pullPolicy(node: ClusterNode, url: string, timeoutMs = 1_000): Promise<PullResult> {
+  try {
+    const res = await fetch(url, { headers: { "x-node": node.name, "x-epoch": String(node.epoch) }, signal: AbortSignal.timeout(timeoutMs) });
+    if (!res.ok) return { status: "unreachable", epoch: node.epoch, reason: `http_${res.status}` };
+    const text = await res.text();
+    if (text.length > MAX_POLICY_BYTES) return { status: "rejected", epoch: node.epoch, reason: "unreadable" };
+    return node.adoptText(text);
+  } catch {
+    // Partition, timeout or reset: keep enforcing the last verified policy.
+    return { status: "unreachable", epoch: node.epoch, reason: "network" };
+  }
+}
+
+export type FaultProxy = {
+  port: number;
+  /** Change faults at run time: drop a fraction of requests, add latency, or cut the link entirely. */
+  set: (f: { dropRate?: number; delayMs?: number; partitioned?: boolean }) => void;
+  close: () => Promise<void>;
+};
+
+/**
+ * Test/benchmark helper: an HTTP proxy in front of the policy server that drops,
+ * delays or partitions traffic, to show that nodes converge despite loss and
+ * keep enforcing their last verified policy while cut off.
+ */
+export function faultProxy(targetPort: number, port = 0, seed = 1): Promise<FaultProxy> {
+  const faults = { dropRate: 0, delayMs: 0, partitioned: false };
+  let s = seed >>> 0 || 1;
+  const rand = () => ((s = (s * 1664525 + 1013904223) >>> 0) / 2 ** 32); // deterministic, not security-relevant
+  const server = createServer((req, res) => {
+    if (faults.partitioned || rand() < faults.dropRate) {
+      req.socket.destroy();
+      return;
+    }
+    setTimeout(() => {
+      fetch(`http://127.0.0.1:${targetPort}${req.url ?? "/"}`, { headers: { "x-node": String(req.headers["x-node"] ?? ""), "x-epoch": String(req.headers["x-epoch"] ?? "") } })
+        .then(async (up) => res.writeHead(up.status, { "content-type": "application/json" }).end(await up.text()))
+        .catch(() => req.socket.destroy());
+    }, faults.delayMs);
+  });
+  return listen(server, port, "127.0.0.1").then((p) => ({ port: p, set: (f) => Object.assign(faults, f), close: () => closeServer(server) }));
+}
+
+function listen(server: Server, port: number, host: string): Promise<number> {
+  return new Promise((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(port, host, () => resolve((server.address() as AddressInfo).port));
+  });
+}
+
+function closeServer(server: Server): Promise<void> {
+  server.closeAllConnections();
+  return new Promise((resolve) => server.close(() => resolve()));
+}
