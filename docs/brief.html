@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Trust, but verify — project brief</title>
+<style>
+@page { size: A4; margin: 14mm 15mm; }
+body { font: 9.6pt/1.38 "Segoe UI", Arial, sans-serif; color: #111; }
+h1 { font-size: 17pt; margin: 0 0 2px; } h2 { font-size: 11.5pt; margin: 9px 0 3px; color: #0b4f8a; border-bottom: 1px solid #cfdde9; }
+.meta { color: #444; font-size: 8.8pt; margin-bottom: 6px; } p { margin: 3px 0; } ul { margin: 2px 0 2px 16px; padding: 0; } li { margin: 1px 0; }
+table { border-collapse: collapse; width: 100%; font-size: 8.6pt; margin: 3px 0; } td, th { border: 1px solid #d5dde5; padding: 2px 4px; vertical-align: top; text-align: left; } th { background: #eef4f9; }
+code { font: 8.4pt Consolas, monospace; background: #f3f5f7; padding: 0 2px; } .page2 { page-break-before: always; } .k { font-weight: 600; }
+.diagram { font: 8pt Consolas, monospace; background: #f7f9fb; border: 1px solid #dde5ec; padding: 4px 6px; white-space: pre; margin: 3px 0; }
+</style></head><body>
+
+<h1>Trust, but verify</h1>
+<div class="meta"><b>Team:</b> [TEAM NAME] — Shadow-46, Lomada-Sahithi · <b>Repository:</b> https://github.com/Shadow-46/trust-but-verify ([COMMIT]) · <b>Demo:</b> <code>echo '{…}' | node track4_service.mjs</code> · console: <code>cd dashboard &amp;&amp; npm run dev</code></div>
+
+<h2>Unique selling proposition</h2>
+<p>When a device is lost or a key must rotate, most systems keep trusting stale credentials and cannot prove what they decided. Our prototype revokes a device on every node in about 20 ms, rotates keys with a documented cutoff while transfers finish, protects files and messages with post-quantum cryptography against "harvest now, decrypt later", and — the core differentiator — <span class="k">every allow and every block carries a plain-language reason in an ML-DSA-signed, tamper-evident log</span>. It fails closed on any integrity doubt, including an attacker rolling state back to undo a revocation. Zero dependencies: only vetted <code>node:crypto</code> (OpenSSL 3.5) primitives, no custom crypto, no ML.</p>
+
+<h2>Architecture</h2>
+<div class="diagram">client/device ──signed request (ML-DSA-65)──▶ node ×3 ──verify sig · owner · device · revocation · nonce · key version──▶ allow/deny + reason
+control plane ──policy epoch n, ML-DSA-signed──▶ nodes (reject forged or older epochs; keep last verified policy offline)
+judge worker ──JSON──▶ track4_service.mjs ─▶ validate ─▶ policy ─▶ AES-256-GCM vault ─▶ signed hash-chained audit log
+peer A ◀──X25519 + ML-KEM-768 hybrid handshake, transcript signed──▶ peer B   (AES-GCM chunks, recipient-bound)
+access logs ──▶ rule + approval + service-edge-graph detector ──▶ explained alerts (operator console)</div>
+<ul>
+<li><b>Identity &amp; authorization:</b> each request is checked against the signed policy: asset exists, actor owns it, actor/device not disabled or revoked, request signature, ±30 s timestamp, single-use nonce, key version within its window. The decision and reason are written durably before replying.</li>
+<li><b>Keys:</b> master key (or KMS via <code>TRACK4_MASTER_KEY</code>) → HKDF → key-encryption key, state-MAC key; versioned data keys wrapped by the KEK. Rotation: grace period applies (30 s default) then every node rejects the old version; stored files re-encrypted in one atomic commit.</li>
+<li><b>Recovery &amp; integrity:</b> atomic writes, PID-checked locks, state version bound to a signed log head (rollback and truncation detected), signed and digested backups whose restore keeps later revocations.</li>
+<li><b>Messaging:</b> forward-secret hybrid sessions, AAD binding of sender/recipient/message/position, duplicate refusal, reassembly under loss/reordering with reported failures, resumption bound to the peer's identity key.</li>
+<li><b>Libraries:</b> Node 24.11.1 built-ins only (ML-KEM-768, ML-DSA-65, X25519, AES-256-GCM, HKDF/HMAC-SHA-256); Next.js only for the demo console.</li>
+</ul>
+
+<h2>Verified outcomes</h2>
+<table><tr><th>Evidence</th><th>Result (Docker node:24.11.1, offline, read-only)</th></tr>
+<tr><td>Official toolkit validator · our tests</td><td>22/22 PASS · 61 tests PASS; <code>protected_read</code> decapsulated and proof verified with Python pqcrypto 0.4.0</td></tr>
+<tr><td>Revocation across 3 node processes</td><td>median 19 ms, max 21 ms to the last node enforcing; rotation cutoff and in-flight transfers PASS</td></tr>
+<tr><td>Detector, 10 seeds, 240 incidents, ~12k benign events</td><td>F1 1.0 (standard and hard), median time-to-alert 1.1–1.6 s, 0 false alerts per 1,000 benign — an upper bound on synthetic data</td></tr>
+<tr><td>Latency</td><td>≈37 ms per request incl. process start (12 ms is bare Node)</td></tr></table>
+<p>All 12 goals mapped to tests and evidence in <code>docs/EVIDENCE.md</code>.</p>
+
+<h2>Five-minute fallback video</h2>
+<p><b>Video link:</b> [VIDEO URL] · <b>Duration:</b> 5 min · <b>Access checked:</b> [DATE] — opens without requesting permission.</p>
+
+<div class="page2"></div>
+<h1 style="font-size:14pt">One-page threat model</h1>
+<h2>Assets</h2>
+<table><tr><th>Asset</th><th>Property</th><th>Asset</th><th>Property</th></tr>
+<tr><td>File bodies, messages</td><td>Confidentiality (incl. future quantum), integrity, recipient binding</td><td>Policy: owners, devices, revocations, key versions</td><td>Integrity, freshness (no rollback)</td></tr>
+<tr><td>Master, data, signing keys</td><td>Confidentiality</td><td>Audit / key-event log</td><td>Integrity, completeness, true actor</td></tr></table>
+<h2>Adversaries</h2>
+<ul><li><b>Unauthorized caller</b> — malformed input, other users' IDs, injection, <code>__proto__</code>, path tricks.</li>
+<li><b>Lost/stolen device holder</b> — has the device key, keeps trying after revocation.</li>
+<li><b>Compromised valid account</b> — unexpected privilege gain, lateral movement with valid credentials.</li>
+<li><b>Network attacker</b> — records, replays, re-addresses, drops, reorders, swaps handshake keys; later may hold a quantum computer or stolen identity keys.</li>
+<li><b>Local attacker without keys</b> — edits, rolls back or truncates state, logs, backups, policy; plants symlinks in shared temp.</li></ul>
+<h2>Trust boundaries &amp; assumptions</h2>
+<p>Request → adapter (validation, identity, policy, audit) · control plane → nodes (signed epochs) · device → node (signed requests) · peer ↔ peer (signed hybrid handshake) · storage (MAC'd state, AES-GCM bodies, signed log/backups). We assume correct OpenSSL 3.5 primitives, out-of-band provisioning of the trust anchor and identity keys, key files private to the service user or a KMS-held master key, node clocks within ±30 s, and <code>setup</code> as a trusted operator action.</p>
+<h2>Threat → defense → evidence</h2>
+<table><tr><th>Threat</th><th>Defense</th><th>Evidence</th></tr>
+<tr><td>Lost device keeps access</td><td>Signed revocation, every request re-checked</td><td>validator; ≤21 ms to all nodes</td></tr>
+<tr><td>Harvest now, decrypt later</td><td>ML-KEM-768 + X25519 hybrid; AES-256 at rest</td><td>messaging, protected_read interop</td></tr>
+<tr><td>Forged or replayed old policy</td><td>ML-DSA signature, monotonic epoch, high-water mark</td><td>cluster + recovery tests</td></tr>
+<tr><td>Undo a revocation on disk</td><td>HMAC'd state version bound to signed log head</td><td>rollback test → integrity_failure</td></tr>
+<tr><td>Forged or edited log records</td><td>Hash chain + ML-DSA signatures; user text only as JSON fields</td><td>injection, edit, truncation tests</td></tr>
+<tr><td>Crash mid-rotation</td><td>Single atomic commit; PID-checked lock recovery</td><td>kill before/after commit tests</td></tr>
+<tr><td>Replay, re-addressing, MITM</td><td>AAD binding, duplicate refusal, signed transcript</td><td>messaging tests</td></tr>
+<tr><td>Privilege abuse, lateral movement</td><td>Explainable rules over approvals + service graph</td><td>detector metrics</td></tr></table>
+<h2>Limits and remaining risks (honest scope)</h2>
+<ul><li><b>Largest risk:</b> full host compromise (keys + disk) allows decryption and a <i>consistent</i> rollback of state and log together; mitigation is an external KMS and shipping signed log heads to a witness (not built).</li>
+<li>No HSM; key erasure relies on Node process memory. Node clocks shared in the propagation measurement.</li>
+<li>Cluster transport is a shared filesystem; messaging is a tested library without network transport.</li>
+<li>Detector accuracy measured on public practice data and our synthetic generator (same documented environment) — not production traffic.</li>
+<li>Denial of service and side channels are out of scope.</li></ul>
+</body></html>
