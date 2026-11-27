@@ -11,7 +11,7 @@ code { font: 8.4pt Consolas, monospace; background: #f3f5f7; padding: 0 2px; } .
 </style></head><body>
 
 <h1>Trust, but verify</h1>
-<div class="meta"><b>Team:</b> WASD — Shadow-46, Lomada-Sahithi · <b>Repository:</b> https://github.com/Shadow-46/trust-but-verify ([COMMIT]) · <b>Demo:</b> <code>node track4_service.mjs</code> (one JSON request on stdin; copy-paste examples in README "Clean-machine setup") · console: <code>cd dashboard &amp;&amp; npm run dev</code></div>
+<div class="meta"><b>Team:</b> WASD — Shadow-46, Lomada-Sahithi · <b>Repository:</b> <a href="https://github.com/Shadow-46/trust-but-verify">github.com/Shadow-46/trust-but-verify</a> (code at <code>8a81ebc</code>) · <b>Demo:</b> <code>node track4_service.mjs</code> (one JSON request on stdin; copy-paste examples in README "Clean-machine setup") · console: <code>cd dashboard &amp;&amp; npm run dev</code></div>
 
 <h2>Unique selling proposition</h2>
 <p>When a device is lost or a key must rotate, most systems keep trusting stale credentials and cannot prove what they decided. Our prototype revokes a device on every node in about 20 ms (3 local node processes, shared clock), rotates keys with a documented cutoff while transfers finish, protects files and messages with post-quantum cryptography against "harvest now, decrypt later", and — the core differentiator — <span class="k">every allow and every block is recorded with its reason in an ML-DSA-signed, tamper-evident log and explained in plain language in the operator console</span>. It fails closed on any integrity doubt, including an attacker rolling state back to undo a revocation. Zero dependencies: only vetted <code>node:crypto</code> (OpenSSL 3.5) primitives, no custom crypto, no ML.</p>
@@ -40,7 +40,7 @@ access logs ──▶ rule + approval + service-edge-graph detector ──▶ ex
 <p>All 12 goals mapped to tests and evidence in <code>docs/EVIDENCE.md</code>.</p>
 
 <h2>Five-minute fallback video</h2>
-<p><b>Video link:</b> [VIDEO URL] · <b>Duration:</b> 5 min · <b>Access checked:</b> [DATE] — opens without requesting permission.</p>
+<p><b>Video link:</b> <a href="https://drive.google.com/file/d/1cr6oqBE1V-2U2jDocggycWr7NzLCKP0m/view?usp=sharing">drive.google.com/file/d/1cr6oqBE1V-2U2jDocggycWr7NzLCKP0m</a> · <b>Duration:</b> 4 min 33 s · <b>Access checked:</b> 2026-11-27 — opens without requesting permission.</p>
 
 <div class="page2"></div>
 <h1 style="font-size:14pt">One-page threat model</h1>
