@@ -41,8 +41,9 @@ echo '{"op":"setup","owners":{"brief":"maya"},"contents":{"brief":"demo note"},"
 echo '{"op":"read","actor":"maya","asset":"brief","request_id":"r01"}' | node track4_service.mjs
 ```
 State is kept in `$TRACK4_STATE_DIR`, or `<os temp dir>/trust-but-verify` if unset.
-On Windows PowerShell, pipe the same JSON with single quotes, e.g.
-`'{"op":"read","actor":"maya","asset":"brief","request_id":"r02"}' | node track4_service.mjs`.
+On Windows, Git Bash runs the lines above as is. Windows PowerShell 5.1 adds a byte-order mark when piping to
+`node` (rejected as `invalid_json`), so go through `cmd` there, e.g.
+`cmd /c 'echo {"op":"read","actor":"maya","asset":"brief","request_id":"r02"}| node track4_service.mjs'`.
 
 ### Dependencies
 | Part | Needs | Install |
