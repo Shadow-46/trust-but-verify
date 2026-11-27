@@ -1,82 +1,258 @@
 <!doctype html>
 <html lang="en"><head><meta charset="utf-8"><title>Trust, but verify — project brief</title>
 <style>
-@page { size: A4; margin: 14mm 15mm; }
-body { font: 9.6pt/1.38 "Segoe UI", Arial, sans-serif; color: #111; }
-h1 { font-size: 17pt; margin: 0 0 2px; } h2 { font-size: 11.5pt; margin: 9px 0 3px; color: #0b4f8a; border-bottom: 1px solid #cfdde9; }
-.meta { color: #444; font-size: 8.8pt; margin-bottom: 6px; } p { margin: 3px 0; } ul { margin: 2px 0 2px 16px; padding: 0; } li { margin: 1px 0; }
-table { border-collapse: collapse; width: 100%; font-size: 8.6pt; margin: 3px 0; } td, th { border: 1px solid #d5dde5; padding: 2px 4px; vertical-align: top; text-align: left; } th { background: #eef4f9; }
-code { font: 8.4pt Consolas, monospace; background: #f3f5f7; padding: 0 2px; } .page2 { page-break-before: always; } .k { font-weight: 600; }
-.diagram { font: 8pt Consolas, monospace; background: #f7f9fb; border: 1px solid #dde5ec; padding: 4px 6px; white-space: pre; margin: 3px 0; }
+@page { size: A4; margin: 12mm 14mm; }
+* { -webkit-print-color-adjust: exact; print-color-adjust: exact; box-sizing: border-box; }
+:root { --ink: #16202e; --sub: #4a5568; --line: #c9d3df; --blue: #1f4fa3; --pale: #eef3fa; --green: #17734a; --red: #b42318; --amber: #a15c00; }
+body { margin: 0; font: 9.3pt/1.36 "Segoe UI", Arial, sans-serif; color: var(--ink); }
+h1 { font-size: 19pt; line-height: 1.1; margin: 0; letter-spacing: -0.2px; }
+h2 { font-size: 10.8pt; margin: 7px 0 3px; color: var(--blue); }
+p { margin: 2px 0; } ul { margin: 2px 0 2px 15px; padding: 0; } li { margin: 1px 0; }
+a { color: var(--blue); text-decoration: none; border-bottom: 1px solid #b8c7e3; }
+code { font: 8.3pt Consolas, monospace; background: #f1f4f8; padding: 0 2px; border-radius: 2px; }
+.k { font-weight: 600; }
+.head { display: flex; justify-content: space-between; align-items: flex-end; border-bottom: 2px solid var(--ink); padding-bottom: 4px; }
+.tag { color: var(--sub); font-size: 9.6pt; margin-top: 2px; }
+.badge { font-size: 8pt; color: var(--sub); text-align: right; line-height: 1.35; }
+.meta { display: grid; grid-template-columns: auto 0.9fr auto 1.25fr; gap: 1px 8px; font-size: 8.6pt; margin: 5px 0 2px; }
+.meta b { color: var(--sub); font-weight: 600; }
+figure { margin: 3px 0 2px; break-inside: avoid; }
+figure svg { width: 100%; height: auto; display: block; }
+figcaption { font-size: 7.8pt; color: var(--sub); margin-top: 1px; }
+.cols { display: grid; grid-template-columns: 1fr 1fr; gap: 0 14px; }
+.cols ul { margin-left: 13px; }
+.tiles { display: grid; grid-template-columns: repeat(6, 1fr); gap: 5px; margin: 3px 0; break-inside: avoid; }
+.tile { border: 1px solid var(--line); border-top: 3px solid var(--green); border-radius: 3px; padding: 3px 5px 4px; }
+.tile .n { font-size: 14pt; font-weight: 700; line-height: 1.1; }
+.tile .l { font-size: 7.6pt; color: var(--sub); line-height: 1.25; }
+.video { display: grid; grid-template-columns: auto 1fr; gap: 0 10px; border: 1px solid var(--line); background: var(--pale); border-radius: 3px; padding: 5px 8px; margin-top: 5px; break-inside: avoid; }
+.play { width: 26px; height: 26px; border-radius: 50%; background: var(--blue); position: relative; margin-top: 2px; }
+.play:after { content: ""; position: absolute; left: 10px; top: 7px; border-left: 9px solid #fff; border-top: 6px solid transparent; border-bottom: 6px solid transparent; }
+table { border-collapse: collapse; width: 100%; font-size: 8.2pt; margin: 2px 0; break-inside: avoid; }
+td, th { border-bottom: 1px solid #dfe5ec; padding: 2px 4px; vertical-align: top; text-align: left; }
+th { background: var(--pale); font-weight: 600; border-bottom: 1px solid var(--line); }
+.st { white-space: nowrap; font-weight: 600; font-size: 7.8pt; }
+.m { color: var(--green); } .p { color: var(--blue); } .x { color: var(--amber); }
+.page2 { break-before: page; }
+.page2 ~ h2 { margin-top: 5px; }
+.adv { font-size: 8.2pt; margin: 0; padding: 0; list-style: none; }
+.adv li { margin: 0 0 2px; padding-left: 22px; position: relative; }
+.adv li b.id { position: absolute; left: 0; top: 0; background: var(--red); color: #fff; font-size: 7.2pt; border-radius: 7px; padding: 0 4px; line-height: 13px; }
+.small { font-size: 8.3pt; }
+.atk { display: grid; grid-template-columns: 1fr 1fr; gap: 3px 12px; margin: 3px 0 0; break-inside: avoid; }
+.atk div { border-left: 3px solid var(--blue); padding: 1px 0 1px 6px; }
+.atk b { font-size: 8.4pt; margin-right: 3px; }
+.atk span { display: inline-block; font-size: 7.6pt; background: #f1f4f8; border: 1px solid #dbe2ea; border-radius: 8px; padding: 0 5px; margin: 1px 1px 0 0; }
+col.c1{width:22%} col.c2{width:6%} col.c3{width:34%} col.c4{width:22%} col.c5{width:16%}
 </style></head><body>
 
-<h1>Trust, but verify</h1>
-<div class="meta"><b>Team:</b> WASD — Shadow-46, Lomada-Sahithi · <b>Repository:</b> <a href="https://github.com/Shadow-46/trust-but-verify">github.com/Shadow-46/trust-but-verify</a> (code at <code>8a81ebc</code>) · <b>Demo:</b> <code>node track4_service.mjs</code> (one JSON request on stdin; copy-paste examples in README "Clean-machine setup") · console: <code>cd dashboard &amp;&amp; npm run dev</code></div>
+<!-- ============================== PAGE 1 ============================== -->
+<div class="head">
+  <div><h1>Trust, but verify</h1>
+  <div class="tag">Zero-trust access, post-quantum protection and a log that proves every decision</div></div>
+  <div class="badge">DevForge 2026 · Track 4<br>Team WASD</div>
+</div>
+<div class="meta">
+  <b>Team</b><span>Shadow-46, Lomada-Sahithi</span>
+  <b>Repository</b><span><a href="https://github.com/Shadow-46/trust-but-verify">github.com/Shadow-46/trust-but-verify</a> · commit <code>8a81ebc</code></span>
+  <b>Entry point</b><span><code>node track4_service.mjs</code> (JSON on stdin)</span>
+  <b>Console</b><span><code>cd dashboard &amp;&amp; npm run demo</code> → localhost:3000</span>
+</div>
 
 <h2>Unique selling proposition</h2>
-<p>When a device is lost or a key must rotate, most systems keep trusting stale credentials and cannot prove what they decided. Our prototype revokes a device on every node in about 20 ms (3 local node processes, shared clock), rotates keys with a documented cutoff while transfers finish, protects files and messages with post-quantum cryptography against "harvest now, decrypt later", and — the core differentiator — <span class="k">every allow and every block is recorded with its reason in an ML-DSA-signed, tamper-evident log and explained in plain language in the operator console</span>. It fails closed on any integrity doubt, including an attacker rolling state back to undo a revocation. Zero dependencies: only vetted <code>node:crypto</code> (OpenSSL 3.5) primitives, no custom crypto, no ML.</p>
+<p>When a device is lost or a key must rotate, most systems keep trusting stale credentials and cannot prove what they decided. Our service revokes a device on every node in about 20 ms (3 local node processes), rotates keys with a documented cutoff while transfers finish, and protects files and messages with post-quantum cryptography against "harvest now, decrypt later". <span class="k">Every allow and every block is written with its reason into an ML-DSA-signed, hash-chained log and explained in plain language in the operator console</span>, and the service fails closed on any integrity doubt — including an attacker rolling state back to undo a revocation. Zero dependencies: only vetted <code>node:crypto</code> (OpenSSL 3.5) primitives, no custom crypto or ML.</p>
 
 <h2>Architecture</h2>
-<div class="diagram">client/device ──signed request (ML-DSA-65)──▶ node ×3 ──verify sig · owner · device · revocation · nonce · key version──▶ allow/deny + reason
-control plane ──policy epoch n, ML-DSA-signed──▶ nodes (reject forged or older epochs; keep last verified policy offline)
-judge worker ──JSON──▶ track4_service.mjs ─▶ validate ─▶ policy ─▶ AES-256-GCM vault ─▶ signed hash-chained audit log
-peer A ◀──X25519 + ML-KEM-768 hybrid handshake, transcript signed──▶ peer B   (AES-GCM chunks, recipient-bound)
-access logs ──▶ rule + approval + service-edge-graph detector ──▶ explained, MITRE ATT&amp;CK-tagged alerts (console)</div>
+<figure>
+<svg viewBox="0 0 680 262" xmlns="http://www.w3.org/2000/svg" font-family="Segoe UI, Arial, sans-serif" font-size="9" fill="#16202e">
+  <defs>
+    <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#4a5568"/></marker>
+    <marker id="ab" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#1f4fa3"/></marker>
+  </defs>
+  <style>
+    .bx{fill:#fff;stroke:#9fb0c6;stroke-width:1} .hl{fill:#eef3fa;stroke:#1f4fa3;stroke-width:1.2}
+    .t{font-weight:700;font-size:10px} .s{fill:#4a5568;font-size:8.6px} .lane{font-weight:700;font-size:9px;fill:#1f4fa3}
+    .ln{stroke:#4a5568;stroke-width:1.1;fill:none} .lb{stroke:#1f4fa3;stroke-width:1.1;fill:none;stroke-dasharray:3 2}
+    .ok{fill:#17734a;font-size:8.4px;font-weight:600} .no{fill:#b42318;font-size:8.4px;font-weight:600}
+  </style>
+
+  <!-- Lane 1: judged adapter -->
+  <text class="lane" x="0" y="10">1 · Judged service — one process per request</text>
+  <rect class="bx" x="0" y="16" width="94" height="48" rx="4"/><text class="t" x="7" y="31">Request</text><text class="s" x="7" y="44">one JSON on stdin</text><text class="s" x="7" y="55">setup · read · revoke…</text>
+  <rect class="bx" x="110" y="16" width="94" height="48" rx="4"/><text class="t" x="117" y="31">Validate</text><text class="s" x="117" y="44">types, ID charset,</text><text class="s" x="117" y="55">__proto__, size</text>
+  <rect class="bx" x="220" y="16" width="100" height="48" rx="4"/><text class="t" x="227" y="31">Authorize</text><text class="s" x="227" y="44">asset exists, owner,</text><text class="s" x="227" y="55">not disabled/revoked</text>
+  <rect class="bx" x="336" y="16" width="94" height="48" rx="4"/><text class="t" x="343" y="31">Vault</text><text class="s" x="343" y="44">AES-256-GCM bodies</text><text class="s" x="343" y="55">versioned data keys</text>
+  <rect class="hl" x="446" y="16" width="94" height="48" rx="4"/><text class="t" x="453" y="31">Audit log</text><text class="s" x="453" y="44">SHA-256 hash chain</text><text class="s" x="453" y="55">ML-DSA-65 / record</text>
+  <path class="ln" d="M94,40 H108" marker-end="url(#a)"/><path class="ln" d="M204,40 H218" marker-end="url(#a)"/>
+  <path class="ln" d="M320,40 H334" marker-end="url(#a)"/><path class="ln" d="M430,40 H444" marker-end="url(#a)"/>
+  <text class="ok" x="320" y="12">allow</text>
+  <path class="ln" d="M270,64 V76 H493 V66" marker-end="url(#a)"/><text class="no" x="276" y="87">deny + reason, written durably before the reply</text>
+  <text class="s" x="0" y="80">state MAC'd, its version</text><text class="s" x="0" y="91">bound to the signed log head</text>
+
+  <!-- Lane 2: cluster -->
+  <text class="lane" x="0" y="114">2 · Cluster — control plane + 3 node processes, policy over HTTP</text>
+  <rect class="bx" x="0" y="122" width="118" height="56" rx="4"/><text class="t" x="7" y="137">Control plane</text><text class="s" x="7" y="150">signs policy epoch n</text><text class="s" x="7" y="161">ML-DSA-65 · revocations,</text><text class="s" x="7" y="171">keys, rotation cutoff</text>
+  <path class="ln" d="M118,150 H196" marker-end="url(#a)"/><text class="s" x="124" y="144">HTTP pull</text><text class="s" x="124" y="162">forged / older</text><text class="s" x="124" y="172">epoch refused</text>
+  <rect class="bx" x="198" y="120" width="112" height="18" rx="3"/><text class="t" x="206" y="133" font-size="9">Node 1</text>
+  <rect class="bx" x="198" y="141" width="112" height="18" rx="3"/><text class="t" x="206" y="154" font-size="9">Node 2</text>
+  <rect class="bx" x="198" y="162" width="112" height="18" rx="3"/><text class="t" x="206" y="175" font-size="9">Node 3</text>
+  <text class="s" x="250" y="133">own signed log</text><text class="s" x="250" y="154">own signed log</text><text class="s" x="250" y="175">own signed log</text>
+  <rect class="bx" x="422" y="122" width="118" height="56" rx="4"/><text class="t" x="429" y="137">Device</text><text class="s" x="429" y="150">signs each request:</text><text class="s" x="429" y="161">target node, nonce,</text><text class="s" x="429" y="171">±30 s, key version</text>
+  <path class="ln" d="M422,150 H312" marker-end="url(#a)"/><text class="s" x="322" y="144">ML-DSA-65 request</text><text class="s" x="322" y="162">replayed / revoked /</text><text class="s" x="322" y="172">wrong node → deny</text>
+  <text class="s" x="0" y="195">a cut-off node keeps its last verified policy; the partition heals on reconnect</text>
+
+  <!-- Lane 3: messaging -->
+  <text class="lane" x="0" y="214">3 · Messaging — peer to peer over TCP</text>
+  <rect class="bx" x="0" y="220" width="76" height="38" rx="4"/><text class="t" x="9" y="236">Peer A</text><text class="s" x="9" y="249">identity key</text>
+  <rect class="hl" x="92" y="220" width="356" height="38" rx="4"/>
+  <text class="t" x="100" y="234">Hybrid handshake: X25519 + ML-KEM-768, transcript signed (ML-DSA-65)</text>
+  <text class="s" x="100" y="249">AES-256-GCM chunks, AAD = sender, recipient, message, position · HMAC ratchet</text>
+  <rect class="bx" x="464" y="220" width="76" height="38" rx="4"/><text class="t" x="473" y="236">Peer B</text><text class="s" x="473" y="249">identity key</text>
+  <path class="ln" d="M76,239 H90" marker-end="url(#a)" marker-start="url(#a)"/><path class="ln" d="M448,239 H462" marker-end="url(#a)" marker-start="url(#a)"/>
+
+  <!-- Console column -->
+  <rect x="560" y="16" width="120" height="242" rx="5" fill="#16202e"/>
+  <text x="569" y="32" fill="#fff" font-weight="700" font-size="10">Operator console</text>
+  <text x="569" y="44" fill="#b9c6d8" font-size="8.2">Next.js, demo only</text>
+  <g fill="#e6ecf4" font-size="8.4">
+    <text x="569" y="64" font-weight="700" fill="#fff">Detector</text>
+    <text x="569" y="76">rules + approvals +</text><text x="569" y="87">service-edge graph</text>
+    <text x="569" y="99">→ ATT&amp;CK-tagged alerts</text>
+    <text x="569" y="119" font-weight="700" fill="#fff">Explain</text>
+    <text x="569" y="131">every decision in</text><text x="569" y="142">plain language</text>
+    <text x="569" y="162" font-weight="700" fill="#fff">Attack Lab</text>
+    <text x="569" y="174">15 real attacks, 8 live</text><text x="569" y="185">step by step</text>
+    <text x="569" y="205" font-weight="700" fill="#fff">Live Monitor</text>
+    <text x="569" y="217">2nd laptop, read-only</text><text x="569" y="228">LAN gateway</text>
+  </g>
+  <path class="lb" d="M540,40 H556" marker-end="url(#ab)"/><path class="lb" d="M540,150 H556" marker-end="url(#ab)"/>
+</svg>
+<figcaption>Solid arrows: requests and data. Dashed: signed logs read by the console. Every component shown is built and tested, none is planned.</figcaption>
+</figure>
+
+<div class="cols small">
 <ul>
-<li><b>Identity &amp; authorization:</b> judged service: asset exists, actor owns it, actor not disabled or revoked; the decision and reason are written durably before replying. Cluster nodes also verify the device's ML-DSA request signature, the signed <i>target node</i> (a request replayed to another node is refused: rejected on one node = rejected on every node, also after restart), ±30 s timestamp, single-use nonce and key version.</li>
-<li><b>Keys:</b> master key (or KMS via <code>TRACK4_MASTER_KEY</code>) → HKDF → key-encryption key, state-MAC key; versioned data keys wrapped by the KEK. Rotation: grace period applies (30 s default) then every node rejects the old version; stored files re-encrypted in one atomic commit.</li>
-<li><b>Recovery &amp; integrity:</b> atomic writes, PID-checked locks, state version bound to a signed log head (rollback and truncation detected), signed and digested backups whose restore keeps later revocations.</li>
-<li><b>Messaging:</b> forward-secret hybrid sessions plus a per-message HMAC-SHA-256 ratchet (stealing the live keys does not reveal earlier messages of the same session), AAD binding of sender/recipient/message/position, duplicate refusal, reassembly under loss/reordering with reported failures, resumption bound to the peer's identity key.</li>
-<li><b>Libraries:</b> Node 24.11.1 built-ins only (ML-KEM-768, ML-DSA-65, X25519, AES-256-GCM, HKDF/HMAC-SHA-256); Next.js only for the demo console.</li>
+<li><b>Identity &amp; authorization:</b> every request re-checks owner, disabled and revoked lists; nodes also verify the device's ML-DSA signature, target node, nonce and key version.</li>
+<li><b>Keys:</b> master key (or a KMS via <code>TRACK4_MASTER_KEY</code>) → HKDF → key-encryption key and state-MAC key; versioned data keys. Rotation: 30 s grace, then every node refuses the old version; files re-encrypted in one atomic commit.</li>
 </ul>
+<ul>
+<li><b>Logs &amp; recovery:</b> atomic writes, PID-checked locks, signed log head plus optional external witness, signed and digested backups whose restore keeps later revocations. Any doubt ⇒ <code>integrity_failure</code>.</li>
+<li><b>Versions:</b> Node 24.11.1 built-ins (ML-KEM-768, ML-DSA-65, X25519, AES-256-GCM, HKDF/HMAC-SHA-256); Next.js 16 for the console only.</li>
+</ul>
+</div>
 
-<h2>Verified outcomes</h2>
-<table><tr><th>Evidence</th><th>Result (Docker node:24.11.1, offline, read-only)</th></tr>
-<tr><td>Official toolkit validator · our tests</td><td>22/22 PASS · 99 tests PASS (also from a README-only fresh clone); <code>protected_read</code> decapsulated and proof verified with Python pqcrypto 0.4.0</td></tr>
-<tr><td>Revocation across 3 node processes</td><td>shared disk: median 19 ms, max 21 ms; over HTTP with 20% loss, timed on the control plane: median 184 ms, partition heals in ~0.2 s; rotation cutoff, in-flight transfers PASS</td></tr>
-<tr><td>Detector, 10 seeds, standard + hard runs (120 incidents, ~6k benign events each)</td><td>F1 1.0 (standard and hard), median time-to-alert 1.1–1.6 s, 0 false alerts per 1,000 benign — an upper bound on synthetic data</td></tr>
-<tr><td>Attack Lab (15 real attacks) · self-defence</td><td>15/15 blocked with evidence; 8 replayed live, step by step, against the running service with recovery (Live Monitor on a second screen); signed security alerts (service and every node) for probing, injection, malformed floods, replay, revoked devices or identities, forged policies, tampering, each naming identity, service and event; every live attack is detected; each node keeps its own signed decision log</td></tr>
-<tr><td>Latency</td><td>≈37 ms per request incl. process start (12 ms is bare Node)</td></tr></table>
-<p>All 12 goals mapped to tests and evidence in <code>docs/EVIDENCE.md</code>.</p>
+<h2>Observed outcome</h2>
+<div class="tiles">
+  <div class="tile"><div class="n">22/22</div><div class="l">official validator checks, Docker node:24.11.1, offline</div></div>
+  <div class="tile"><div class="n">99</div><div class="l">tests pass, also from a README-only fresh clone</div></div>
+  <div class="tile"><div class="n">15/15</div><div class="l">real attacks blocked with evidence</div></div>
+  <div class="tile"><div class="n">19 ms</div><div class="l">median revocation to 3 local nodes (max 21 ms)</div></div>
+  <div class="tile"><div class="n">F1 1.0</div><div class="l">detector, 10 seeds, 0 false alerts / 1k benign (synthetic)</div></div>
+  <div class="tile"><div class="n">≈37 ms</div><div class="l">per request incl. process start</div></div>
+</div>
+<p class="small"><code>protected_read</code> verified with Python pqcrypto 0.4.0 · over HTTP with 20% loss: revocation median 184 ms, partition heals in ~0.2 s · live attacks raise signed alerts naming identity, service and event · all 12 goals mapped to tests in <code>docs/EVIDENCE.md</code>.</p>
 
-<h2>Five-minute fallback video</h2>
-<p><b>Video link:</b> <a href="https://drive.google.com/file/d/1cr6oqBE1V-2U2jDocggycWr7NzLCKP0m/view?usp=sharing">drive.google.com/file/d/1cr6oqBE1V-2U2jDocggycWr7NzLCKP0m</a> · <b>Duration:</b> 4 min 33 s · <b>Access checked:</b> 2026-11-27 — opens without requesting permission.</p>
+<h2>Attack Lab: 15 real attacks, all blocked, 8 replayable live step by step</h2>
+<div class="atk">
+  <div><b>Identity &amp; access</b><span>stolen device</span><span>replayed request</span><span>probing others' files</span><span>protected_read abuse</span></div>
+  <div><b>Policy &amp; state</b><span>forged policy</span><span>old genuine policy</span><span>state file rolled back</span><span>state + log rolled back</span></div>
+  <div><b>Audit log</b><span>edit a record</span><span>cut log + head</span><span>swap verify key</span><span>delete signing key</span><span>inject fake record</span></div>
+  <div><b>Input &amp; abuse</b><span>__proto__ / ../ IDs</span><span>malformed flood</span></div>
+</div>
 
+<div class="video">
+  <div class="play"></div>
+  <div><b>Five-minute fallback video</b> — <a href="https://drive.google.com/file/d/1cr6oqBE1V-2U2jDocggycWr7NzLCKP0m/view?usp=sharing">drive.google.com/file/d/1cr6oqBE1V-2U2jDocggycWr7NzLCKP0m</a><br>
+  <span class="small"><b>Duration:</b> 4 min 33 s · <b>Access checked:</b> 2026-11-27, plays signed out without requesting permission. Shows owner checks, a lost laptop revoked and denied, a rollback attack failing closed and recovered from a signed backup, key rotation, the 3-node cluster, post-quantum messaging, the detector and the live Attack Lab with the Live Monitor.</span></div>
+</div>
+
+<!-- ============================== PAGE 2 ============================== -->
 <div class="page2"></div>
-<h1 style="font-size:14pt">One-page threat model</h1>
+<div class="head"><div><h1 style="font-size:15pt">One-page threat model</h1></div><div class="badge">Trust, but verify · Team WASD</div></div>
+
 <h2>Assets</h2>
-<table><tr><th>Asset</th><th>Property</th><th>Asset</th><th>Property</th></tr>
+<table><tr><th>Asset</th><th>Property that matters</th><th>Asset</th><th>Property that matters</th></tr>
 <tr><td>File bodies, messages</td><td>Confidentiality (incl. future quantum), integrity, recipient binding</td><td>Policy: owners, devices, revocations, key versions</td><td>Integrity, freshness (no rollback)</td></tr>
-<tr><td>Master, data, signing keys</td><td>Confidentiality</td><td>Audit / key-event log</td><td>Integrity, completeness, true actor</td></tr>
-<tr><td>Identities: actor IDs, device and identity keys</td><td>Authenticity, revocability</td><td>Service during rotation, crashes and attack</td><td>Availability, consistency</td></tr></table>
-<h2>Adversaries</h2>
-<ul><li><b>Unauthorized caller</b> — malformed input, other users' IDs, injection, <code>__proto__</code>, path tricks.</li>
-<li><b>Lost/stolen device holder</b> — has the device key, keeps trying after revocation.</li>
-<li><b>Compromised valid account</b> — unexpected privilege gain, lateral movement with valid credentials.</li>
-<li><b>Network attacker</b> — records, replays, re-addresses, drops, reorders, swaps handshake keys; later may hold a quantum computer or stolen identity keys.</li>
-<li><b>Local attacker without keys</b> — edits, rolls back or truncates state, logs, backups, policy; plants symlinks in shared temp.</li>
-<li><b>Compromised node (service)</b> — controls its own replica: cannot forge or roll back policy for other nodes (ML-DSA, epoch high-water mark), but can wrongly allow requests it serves until it is isolated.</li></ul>
-<h2>Trust boundaries &amp; assumptions</h2>
-<p>Request → adapter (validation, identity, policy, audit) · control plane → nodes (signed epochs) · device → node (signed requests) · peer ↔ peer (signed hybrid handshake) · storage (MAC'd state, AES-GCM bodies, signed log/backups). We assume correct OpenSSL 3.5 primitives, out-of-band provisioning of the trust anchor and identity keys, key files private to the service user or a KMS-held master key, node clocks within ±30 s, and <code>setup</code> as a trusted operator action.</p>
-<h2>Threat → defense → evidence</h2>
-<p>Status: <i>measured</i> = observed in our tests on node:24.11.1; <i>protocol</i> = a property of the vetted primitive or protocol design that we rely on rather than observe; <i>partial</i> = tested, with a stated gap.</p>
-<table><tr><th>Threat</th><th>Defense</th><th>Evidence</th><th>Status</th></tr>
-<tr><td>Lost device keeps access</td><td>Signed revocation, every request re-checked</td><td>validator; ≤21 ms to all nodes</td><td>measured</td></tr>
-<tr><td>Harvest now, decrypt later</td><td>ML-KEM-768 + X25519 hybrid; AES-256 at rest</td><td>protected_read interop with pqcrypto</td><td>protocol; interop measured</td></tr>
-<tr><td>Stolen keys expose past messages, even within a session</td><td>Ephemeral hybrid keys per session; per-message HMAC ratchet; keys zeroed after use</td><td>forward-secrecy + ratchet tests</td><td>partial (memory erasure; no DH ratchet)</td></tr>
-<tr><td>Forged or replayed old policy</td><td>ML-DSA signature, monotonic epoch, high-water mark</td><td>cluster + recovery tests</td><td>measured</td></tr>
-<tr><td>Undo a revocation on disk</td><td>HMAC'd state version bound to signed log head</td><td>rollback test → integrity_failure</td><td>measured</td></tr>
-<tr><td>Forged or edited log records</td><td>Hash chain + ML-DSA signatures; user text only as JSON fields</td><td>injection, edit, truncation tests</td><td>measured</td></tr>
-<tr><td>Crash mid-rotation</td><td>Single atomic commit; PID-checked lock recovery</td><td>kill before/after commit tests</td><td>measured</td></tr>
-<tr><td>Replay, re-addressing, MITM; replay to another node</td><td>AAD binding, duplicate refusal, signed transcript; target node signed into requests</td><td>messaging + cluster tests</td><td>measured</td></tr>
-<tr><td>Hide records: delete head, swap or delete log keys, race the lock</td><td>Head and keys mandatory; key hash pinned in MAC'd state; exclusive lock breaking</td><td>red-team regression tests (F1–F5)</td><td>measured</td></tr>
-<tr><td>Network attacker on policy or message wire; partition</td><td>Signed policy over HTTP; signed hybrid handshake + AEAD over TCP; 64 KB frames</td><td>network tests: forged policy, replay, bit flip, oversize, partition heal</td><td>measured (loopback)</td></tr>
-<tr><td>Privilege abuse, lateral movement</td><td>Explainable rules over approvals + service graph</td><td>detector metrics</td><td>partial (synthetic data, upper bound)</td></tr></table>
-<h2>Limits and remaining risks (honest scope)</h2>
-<ul><li><b>Largest risk:</b> full host compromise (keys + disk) allows decryption and a <i>consistent</i> rollback of state and log together; the rollback is now detected when the external witness is configured (TRACK4_WITNESS_DIR); key theft still needs an external KMS.</li>
-<li>No HSM; key erasure relies on Node process memory. Red-team findings F1–F5 fixed with regression tests.</li>
-<li>Policy (HTTP) and messages (TCP) cross real process boundaries on loopback; no TLS yet (signatures and the hybrid handshake carry security).</li>
-<li>Detector accuracy measured on public practice data and our synthetic generator (same documented environment) — not production traffic.</li>
-<li>Not built (by choice): Merkle inclusion proofs (hash chain + signed head instead), hybrid logical clocks (skew correction with stated uncertainty instead), SLH-DSA (ML-DSA-65 chosen), DH ratchet (symmetric ratchet only, so no post-compromise security).</li>
-<li>Denial of service and side channels are out of scope.</li></ul>
+<tr><td>Master, data and signing keys</td><td>Confidentiality</td><td>Audit and key-event log</td><td>Integrity, completeness, true actor</td></tr>
+<tr><td>Identities, device and identity keys</td><td>Authenticity, revocability</td><td>Service during rotation, crash, attack</td><td>Availability, consistency</td></tr></table>
+
+<h2>Trust boundaries and adversaries</h2>
+<div style="display:grid;grid-template-columns:1.25fr 1fr;gap:10px;align-items:start">
+<figure>
+<svg viewBox="0 0 400 206" xmlns="http://www.w3.org/2000/svg" font-family="Segoe UI, Arial, sans-serif" font-size="8.6" fill="#16202e">
+  <defs><marker id="c" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#4a5568"/></marker></defs>
+  <style>
+    .z{fill:#f6f8fb;stroke:#8696ad;stroke-dasharray:4 3} .zt{font-weight:700;font-size:8.6px;fill:#4a5568}
+    .b{fill:#fff;stroke:#9fb0c6} .bt{font-weight:700;font-size:9px} .bs{fill:#4a5568;font-size:8px}
+    .w{stroke:#4a5568;stroke-width:1.1;fill:none} .chk{fill:#17734a;font-size:8px;font-weight:700}
+    .r circle{fill:#b42318} .r text{fill:#fff;font-size:7.5px;font-weight:700;text-anchor:middle}
+  </style>
+  <rect class="z" x="0" y="0" width="92" height="206" rx="5"/><text class="zt" x="8" y="13">Untrusted</text>
+  <rect class="b" x="8" y="22" width="76" height="34" rx="3"/><text class="bt" x="14" y="36">Callers</text><text class="bs" x="14" y="48">JSON requests</text>
+  <rect class="b" x="8" y="86" width="76" height="34" rx="3"/><text class="bt" x="14" y="100">Devices</text><text class="bs" x="14" y="112">device keys</text>
+  <rect class="b" x="8" y="150" width="76" height="34" rx="3"/><text class="bt" x="14" y="164">Peers</text><text class="bs" x="14" y="176">identity keys</text>
+
+  <rect class="z" x="124" y="0" width="150" height="74" rx="5"/><text class="zt" x="132" y="13">Service host</text>
+  <rect class="b" x="132" y="20" width="62" height="44" rx="3"/><text class="bt" x="138" y="35">Adapter</text><text class="bs" x="138" y="47">identity,</text><text class="bs" x="138" y="57">policy, audit</text>
+  <rect class="b" x="204" y="20" width="62" height="44" rx="3"/><text class="bt" x="210" y="35">Storage</text><text class="bs" x="210" y="47">state, keys,</text><text class="bs" x="210" y="57">log, backups</text>
+  <path class="w" d="M194,42 H202" marker-end="url(#c)" marker-start="url(#c)"/>
+
+  <rect class="z" x="124" y="84" width="150" height="58" rx="5"/><text class="zt" x="132" y="97">Cluster</text>
+  <rect class="b" x="132" y="103" width="52" height="30" rx="3"/><text class="bt" x="137" y="122">Nodes ×3</text>
+  <rect class="b" x="204" y="103" width="62" height="30" rx="3"/><text class="bt" x="209" y="116">Control</text><text class="bt" x="209" y="127">plane</text>
+  <path class="w" d="M202,118 H186" marker-end="url(#c)"/>
+
+  <rect class="z" x="124" y="152" width="150" height="40" rx="5"/><text class="zt" x="132" y="165">Wire (HTTP / TCP)</text>
+  <text class="bs" x="132" y="180">recorded, replayed, dropped</text>
+
+  <path class="w" d="M84,39 H130" marker-end="url(#c)"/><text class="chk" x="94" y="34">check</text>
+  <path class="w" d="M84,103 H130" marker-end="url(#c)"/><text class="chk" x="94" y="98">check</text>
+  <path class="w" d="M84,167 H122" marker-end="url(#c)" marker-start="url(#c)"/><text class="chk" x="94" y="162">verify</text>
+
+  <rect class="z" x="300" y="0" width="100" height="206" rx="5"/><text class="zt" x="308" y="13">Operator</text>
+  <rect class="b" x="308" y="20" width="84" height="44" rx="3"/><text class="bt" x="314" y="35">setup, revoke,</text><text class="bt" x="314" y="46">rotate</text><text class="bs" x="314" y="57">trusted action</text>
+  <rect class="b" x="308" y="86" width="84" height="44" rx="3"/><text class="bt" x="314" y="101">Console</text><text class="bs" x="314" y="113">reads signed logs,</text><text class="bs" x="314" y="123">LAN view read-only</text>
+  <path class="w" d="M308,42 H276" marker-end="url(#c)"/><path class="w" d="M308,108 H276" marker-end="url(#c)"/>
+
+  <g class="r"><circle cx="108" cy="50" r="7"/><text x="108" y="53">A1</text></g>
+  <g class="r"><circle cx="108" cy="114" r="7"/><text x="108" y="117">A2</text></g>
+  <g class="r"><circle cx="186" cy="66" r="7"/><text x="186" y="69">A3</text></g>
+  <g class="r"><circle cx="262" cy="160" r="7"/><text x="262" y="163">A4</text></g>
+  <g class="r"><circle cx="235" cy="66" r="7"/><text x="235" y="69">A5</text></g>
+  <g class="r"><circle cx="158" cy="136" r="7"/><text x="158" y="139">A6</text></g>
+</svg>
+<figcaption>Dashed zones are trust boundaries; green labels mark where identity and permission are verified. Red badges show where each adversary acts.</figcaption>
+</figure>
+<ul class="adv">
+<li><b class="id">A1</b><b>Unauthorized caller</b> — malformed input, other users' IDs, injection, <code>__proto__</code>, path tricks.</li>
+<li><b class="id">A2</b><b>Lost or stolen device</b> — holds the device key and keeps trying after revocation.</li>
+<li><b class="id">A3</b><b>Compromised valid account</b> — privilege gain and lateral movement with valid credentials.</li>
+<li><b class="id">A4</b><b>Network attacker</b> — records, replays, re-addresses, drops, reorders, swaps handshake keys; may later hold a quantum computer or stolen identity keys.</li>
+<li><b class="id">A5</b><b>Local attacker without keys</b> — edits, rolls back or truncates state, logs, backups, policy; plants symlinks.</li>
+<li><b class="id">A6</b><b>Compromised node</b> — cannot forge or roll back policy for other nodes, but can wrongly allow its own requests until isolated.</li>
+</ul>
+</div>
+
+<h2>Assumptions</h2>
+<p class="small">Correct OpenSSL 3.5 primitives; trust anchor and identity keys provisioned out of band; key files private to the service user or a KMS-held master key; node clocks within ±30 s; <code>setup</code> is a trusted operator action.</p>
+
+<h2>Defenses</h2>
+<p class="small"><span class="m k">measured</span> = observed in our tests on node:24.11.1 · <span class="p k">protocol</span> = property of the vetted primitive we rely on · <span class="x k">partial</span> = tested, gap stated.</p>
+<table><colgroup><col class="c1"><col class="c2"><col class="c3"><col class="c4"><col class="c5"></colgroup><tr><th>Threat</th><th>By</th><th>Defense</th><th>Evidence</th><th>Status</th></tr>
+<tr><td>Lost device keeps access</td><td>A2</td><td>Signed revocation; every request checked</td><td>validator; ≤21 ms, all nodes</td><td class="st m">measured</td></tr>
+<tr><td>Harvest now, decrypt later</td><td>A4</td><td>ML-KEM-768 + X25519 hybrid; AES-256-GCM</td><td>protected_read interop with pqcrypto</td><td class="st p">protocol; interop measured</td></tr>
+<tr><td>Stolen keys expose past messages</td><td>A4</td><td>Ephemeral hybrid keys per session; per-message HMAC ratchet; keys zeroed</td><td>forward-secrecy + ratchet tests</td><td class="st x">partial (no DH ratchet)</td></tr>
+<tr><td>Forged or replayed old policy</td><td>A4 A6</td><td>ML-DSA signature, monotonic epoch</td><td>cluster + recovery tests</td><td class="st m">measured</td></tr>
+<tr><td>Undo a revocation on disk</td><td>A5</td><td>MAC'd state version bound to signed log head</td><td>rollback → integrity_failure</td><td class="st m">measured</td></tr>
+<tr><td>Forge, edit or hide log records</td><td>A1 A5</td><td>Hash chain + ML-DSA; user text only as JSON fields; head and key hash mandatory</td><td>injection, edit, truncation, red-team F1–F5 tests</td><td class="st m">measured</td></tr>
+<tr><td>Crash mid-rotation</td><td>—</td><td>One atomic commit; PID-checked locks</td><td>kill before/after commit</td><td class="st m">measured</td></tr>
+<tr><td>Replay (also to another node), MITM</td><td>A2 A4</td><td>AAD binding, duplicate refusal, signed transcript; target node signed into requests</td><td>messaging, cluster and network tests</td><td class="st m">measured (loopback)</td></tr>
+<tr><td>Privilege abuse, lateral movement</td><td>A3</td><td>Explainable rules, approvals, service graph</td><td>detector metrics</td><td class="st x">partial (synthetic data)</td></tr></table>
+
+<h2>Exclusions and remaining risks</h2>
+<ul class="small">
+<li><b>Largest risk:</b> full host compromise (keys + disk) allows decryption and a <i>consistent</i> rollback of state and log together; the rollback is detected only when the external witness (<code>TRACK4_WITNESS_DIR</code>) is configured, and key theft needs an external KMS.</li>
+<li>No HSM; key erasure relies on Node process memory. Policy (HTTP) and messages (TCP) run on loopback without TLS; signatures and the hybrid handshake carry security.</li>
+<li>Detector accuracy comes from public practice data and our synthetic generator, not production traffic. Not built, by choice: Merkle inclusion proofs, hybrid logical clocks, SLH-DSA, a DH ratchet (so no post-compromise security). Denial of service and side channels are out of scope.</li>
+</ul>
 </body></html>
