@@ -4,12 +4,25 @@ Post-quantum, zero-trust protection for files and messages while keys, devices
 and user permissions change — plus an explainable detector that shows an operator
 when an identity gains unexpected privileges or moves between services.
 
-Built for Yugaantar DevForge 2026, Track 4.
+Built for Yugaantar DevForge 2026, Track 4, by team WASD (Shadow-46, Lomada-Sahithi).
 
-> Work in progress: the protected-resource service, key rotation and multi-node revocation are
-> complete; crash recovery, backups, signed logs, messaging and the detector are complete; the operator console is included for the demo.
+| | |
+|---|---|
+| **Project brief (2 pages)** | [docs/BRIEF.pdf](docs/BRIEF.pdf) |
+| **Five-minute video** | [Google Drive, 4 min 33 s](https://drive.google.com/file/d/1cr6oqBE1V-2U2jDocggycWr7NzLCKP0m/view?usp=sharing) |
+| **Evidence for all 12 goals** | [docs/EVIDENCE.md](docs/EVIDENCE.md) |
+| **Threat model** | [docs/THREAT_MODEL.md](docs/THREAT_MODEL.md) |
+| **Judging entry point** | `track4_service.mjs` (adapter contract v1, Node.js built-ins only) |
 
-**Docs:** [Evidence for all 12 goals](docs/EVIDENCE.md) · [Threat model](docs/THREAT_MODEL.md)
+## Quick check (about 2 minutes)
+```sh
+git clone https://github.com/Shadow-46/trust-but-verify.git && cd trust-but-verify
+npm test                                                             # Node 24.11.1+, no npm install needed
+git clone https://github.com/ScalerOpenSourceLabs/Track-4-Toolkit ../Track-4-Toolkit
+python ../Track-4-Toolkit/validate.py --entry ./track4_service.mjs  # expect 22/22 checks to pass
+```
+Expected: all tests pass (one Linux-only test is skipped on Windows) and the validator reports every check passing.
+Each request is a separate process; state persists in `$TRACK4_STATE_DIR` (default `<os temp>/trust-but-verify`).
 
 ## Clean-machine setup
 Requirements: **Node.js 24.11.1 or newer**. Nothing else — the service uses only
@@ -28,6 +41,8 @@ echo '{"op":"setup","owners":{"brief":"maya"},"contents":{"brief":"demo note"},"
 echo '{"op":"read","actor":"maya","asset":"brief","request_id":"r01"}' | node track4_service.mjs
 ```
 State is kept in `$TRACK4_STATE_DIR`, or `<os temp dir>/trust-but-verify` if unset.
+On Windows PowerShell, pipe the same JSON with single quotes, e.g.
+`'{"op":"read","actor":"maya","asset":"brief","request_id":"r02"}' | node track4_service.mjs`.
 
 ### Dependencies
 | Part | Needs | Install |
@@ -233,3 +248,9 @@ compared with stripping types at runtime.
 | `tests/` | Node test runner suites |
 | `tools/` | Build script, judge-parity container run, pqcrypto interop check |
 | `dashboard/` | Operator console (Next.js) for the demo |
+| `docs/` | Project brief (PDF + HTML source), evidence sheet, threat model |
+| `evidence/` | Measured results (cluster propagation, detector metrics) |
+| `threat-model.json` | Asset and trust boundary declared for the judging worker |
+
+## License
+[MIT](LICENSE)
